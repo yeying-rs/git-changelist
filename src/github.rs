@@ -233,16 +233,16 @@ pub fn collect(slug: &str, selection: &Selection, github: &GitHub) -> Result<Rep
       ranges.push((Some(head.clone()), Some(previous), head));
     }
   } else if let Some(tag) = &selection.tag {
-    if !ordered.iter().any(|t| *t == tag) {
+    if !ordered.contains(&tag) {
       bail!("找不到 Tag：{tag}");
     }
     ranges.push((Some(tag.clone()), previous_of(tag), tag.clone()));
   } else {
-    if selection.unreleased {
-      if let Some(latest) = ordered.first() {
-        let repo: ApiRepo = github.get(&format!("/repos/{slug}"))?;
-        ranges.push((None, Some((*latest).clone()), repo.default_branch));
-      }
+    if selection.unreleased
+      && let Some(latest) = ordered.first()
+    {
+      let repo: ApiRepo = github.get(&format!("/repos/{slug}"))?;
+      ranges.push((None, Some((*latest).clone()), repo.default_branch));
     }
     for tag in ordered.iter().take(selection.limit) {
       ranges.push((Some((*tag).clone()), previous_of(tag), (*tag).clone()));

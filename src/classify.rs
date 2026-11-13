@@ -247,12 +247,11 @@ fn is_version_bump(text: &str) -> bool {
 
 /// Extracts a PR number from `... (#123)` or `Merge pull request #123 from ...`.
 fn strip_pr(subject: &str) -> (&str, Option<u64>) {
-  if let Some(inner) = subject.strip_suffix(')') {
-    if let Some(open) = inner.rfind("(#") {
-      if let Ok(number) = inner[open + 2..].parse::<u64>() {
-        return (inner[..open].trim_end(), Some(number));
-      }
-    }
+  if let Some(inner) = subject.strip_suffix(')')
+    && let Some(open) = inner.rfind("(#")
+    && let Ok(number) = inner[open + 2..].parse::<u64>()
+  {
+    return (inner[..open].trim_end(), Some(number));
   }
   if let Some(rest) = subject.strip_prefix("Merge pull request #") {
     let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
