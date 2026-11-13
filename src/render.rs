@@ -199,6 +199,80 @@ pub fn text(report: &Report, lang: Lang, color: bool) -> String {
   out
 }
 
+/// Markdown with links to GitHub when the repository slug is known.
+pub fn markdown(report: &Report, lang: Lang) -> String {
+  let texts = lang.texts();
+  let base = report
+    .github
+    .as_ref()
+    .map(|slug| format!("https://github.com/{slug}"));
+  let mut out = format!("# {}\n", report.source);
+  if report.versions.is_empty() {
+    let _ = writeln!(out, "\n{}", texts.no_versions);
+  }
+  for version in &report.versions {
+    let title = version_title(version, texts);
+    let title = match (&base, &version.tag, &version.previous) {
+      (Some(base), Some(tag), Some(previous)) => {
+        format!("[{title}]({base}/compare/{previous}...{tag})")
+      }
+      (Some(base), Some(tag), None) => format!("[{title}]({base}/tree/{tag})"),
+      _ => title,
+    };
+    let _ = writeln!(out, "\n## {title}\n\n> {}", version_meta(version, texts));
+    if let Some(note) = &version.tag_message {
+      let _ = writeln!(
+        out,
+        "\n**{}**: {}",
+        texts.tag_note,
+        note.replace('\n', "\n> ")
+      );
+    }
+    if let Some(release) = &version.release {
+      let _ = writeln!(
+        out,
+        "\n<details>\n<summary>{}: <a href=\"{}\">{}</a></summary>\n\n{}\n\n</details>",
+        texts.release,
+        release.url,
+        release.name,
+        release.body.trim()
+      );
+    }
+    let groups = groups(version, texts);
+    if groups.is_empty() && version.release.is_none() {
+      let _ = writeln!(out, "\n{}", texts.no_commits);
+    }
+    for (label, commits) in groups {
+      let _ = writeln!(out, "\n### {label}\n");
+      for commit in commits {
+        let scope = commit
+          .scope
+          .as_ref()
+          .map(|s| format!("**{s}**: "))
+          .unwrap_or_default();
+        let sha = commit.sha.get(..7).unwrap_or(&commit.sha);
+        let (pr, sha) = match &base {
+          Some(base) => (
+            commit.pr.map(|n| format!(" ([#{n}]({base}/pull/{n}))")),
+            format!("[`{sha}`]({base}/commit/{})", commit.sha),
+          ),
+          None => (commit.pr.map(|n| format!(" (#{n})")), format!("`{sha}`")),
+        };
+        let _ = writeln!(
+          out,
+          "- {scope}{}{} {sha}",
+          commit.summary,
+          pr.unwrap_or_default()
+        );
+      }
+    }
+    if let Some(note) = truncation_note(version, texts) {
+      let _ = writeln!(out, "\n_{note}_");
+    }
+  }
+  out
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -259,5 +333,20 @@ mod tests {
     let out = text(&report(), Lang::En, true);
     assert!(out.contains("Bug Fixes") && out.contains("showing 3 of 5 commits"));
     assert!(out.contains('\x1b'));
+  }
+
+  #[test]
+  fn markdown_links_when_github_known() {
+    let mut report = report();
+    report.versions[0].commits[0].pr = Some(9);
+    let plain = markdown(&report, Lang::Zh);
+    assert!(plain.contains("## v1.0.0\n") && plain.contains("(#9)") && plain.contains("`0123456`"));
+
+    report.github = Some("o/r".into());
+    let linked = markdown(&report, Lang::Zh);
+    assert!(linked.contains("## [v1.0.0](https://github.com/o/r/compare/v0.9.0...v1.0.0)"));
+    assert!(linked.contains("[#9](https://github.com/o/r/pull/9)"));
+    assert!(linked.contains("[`0123456`](https://github.com/o/r/commit/0123456789)"));
+    assert!(linked.contains("### ⚠️  破坏性变更"));
   }
 }

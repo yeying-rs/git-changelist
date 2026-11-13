@@ -7,8 +7,8 @@ mod render;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 
-use anyhow::{Result, bail};
-use clap::Parser;
+use anyhow::{Context, Result, bail};
+use clap::{Parser, ValueEnum};
 
 use crate::github::GitHub;
 use crate::model::Selection;
@@ -57,6 +57,21 @@ struct Cli {
   /// 输出语言
   #[arg(long, value_enum, default_value = "zh")]
   lang: Lang,
+
+  /// 输出格式
+  #[arg(short, long, value_enum, default_value = "text")]
+  format: Format,
+
+  /// 写入文件而不是标准输出
+  #[arg(short, long)]
+  output: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum Format {
+  Text,
+  Markdown,
+  Json,
 }
 
 fn parse_range(value: &str) -> Result<(String, String), String> {
@@ -102,8 +117,22 @@ fn run(cli: Cli) -> Result<()> {
   } else {
     bail!("{} 既不是本地目录，也不是可识别的 GitHub 地址", cli.target);
   };
-  let color = std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
-  print!("{}", render::text(&report, cli.lang, color));
+  let output = match cli.format {
+    Format::Text => {
+      let color = cli.output.is_none()
+        && std::io::stdout().is_terminal()
+        && std::env::var_os("NO_COLOR").is_none();
+      render::text(&report, cli.lang, color)
+    }
+    Format::Markdown => render::markdown(&report, cli.lang),
+    Format::Json => serde_json::to_string_pretty(&report)? + "\n",
+  };
+  match &cli.output {
+    Some(file) => {
+      std::fs::write(file, output).with_context(|| format!("无法写入 {}", file.display()))?
+    }
+    None => print!("{output}"),
+  }
   Ok(())
 }
 
