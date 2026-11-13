@@ -15,4 +15,4 @@
 | 11 | 依赖锁文件变更对比子命令 `taglens deps <FROM> <TO>`（`Cargo.lock`、`uv.lock`、`package-lock.json`、`go.sum`） | DONE（支持 4 类锁文件新增/移除/升级对比，无新增外部依赖） |
 | 12 | 编写 `skills/taglens/SKILL.md`，更新 `scripts/install.sh`、`README.md` 与 `AGENTS.md` | DONE（新增 SKILL.md 与 --skill 安装支持，同步更新文档） |
 | 13 | 内置 `taglens skill` 子命令（编译期嵌入 `SKILL.md`，支持一键安装 Skill 或 `--print` 输出） | DONE（已嵌入 SKILL.md 并通过单元测试） |
-| 14 | 补齐 `LICENSE`（MIT）、crates.io 打包元数据、GitHub Actions（CI + 跨平台二进制 Release）与一键安装脚本 `scripts/get.sh` | TODO |
+| 14 | 补齐 `LICENSE`（MIT）、crates.io 打包元数据、GitHub Actions（CI + 跨平台二进制 Release）与一键安装脚本 `scripts/get.sh` | DONE（已通过 cargo package 校验并配置 CI/Release 工作流） |

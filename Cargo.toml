@@ -3,11 +3,13 @@ name = "taglens"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
-description = "See what each Git tag / GitHub release changed: commits grouped into features, fixes and breaking changes"
+description = "Deterministic Git/GitHub version fact extractor and changelog classifier for developers and AI agents"
+license = "MIT"
 repository = "https://github.com/yuxuetr/changelog"
 readme = "README.md"
 keywords = ["git", "changelog", "release", "tags", "cli"]
 categories = ["command-line-utilities", "development-tools"]
+include = ["src/**/*", "skills/**/*", "Cargo.toml", "README.md", "LICENSE"]
 
 [dependencies]
 anyhow = "1.0.104"

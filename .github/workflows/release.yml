@@ -1,0 +1,88 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+            archive: tar.gz
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            archive: tar.gz
+          - target: x86_64-apple-darwin
+            os: macos-15-intel
+            archive: tar.gz
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            archive: zip
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Build release binary
+        run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Package (Unix)
+        if: matrix.archive == 'tar.gz'
+        run: |
+          stage="taglens-${{ github.ref_name }}-${{ matrix.target }}"
+          mkdir -p "$stage/skills/taglens"
+          cp "target/${{ matrix.target }}/release/taglens" "$stage/"
+          cp README.md LICENSE "$stage/"
+          cp skills/taglens/SKILL.md "$stage/skills/taglens/SKILL.md"
+          tar -czf "${stage}.tar.gz" "$stage"
+          cp "${stage}.tar.gz" "taglens-${{ matrix.target }}.tar.gz"
+      - name: Package (Windows)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          $stage = "taglens-${{ github.ref_name }}-${{ matrix.target }}"
+          New-Item -ItemType Directory -Force -Path "$stage/skills/taglens" | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/taglens.exe" "$stage/"
+          Copy-Item README.md, LICENSE "$stage/"
+          Copy-Item skills/taglens/SKILL.md "$stage/skills/taglens/SKILL.md"
+          Compress-Archive -Path "$stage" -DestinationPath "${stage}.zip"
+          Copy-Item "${stage}.zip" "taglens-${{ matrix.target }}.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-${{ matrix.target }}
+          path: |
+            taglens-*.tar.gz
+            taglens-*.zip
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Extract tag annotation for release notes
+        run: |
+          git tag -l --format='%(contents)' "${{ github.ref_name }}" > RELEASE_NOTES.md
+      - uses: softprops/action-gh-release@v2
+        with:
+          body_path: RELEASE_NOTES.md
+          files: |
+            dist/taglens-*

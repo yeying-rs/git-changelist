@@ -13,12 +13,5 @@ echo "Installed: $(command -v taglens)"
 taglens --version
 
 if [[ "${1:-}" == "--skill" ]]; then
-  for dir in "${SKILL_DIR:-}" "$HOME/.gemini/skills" "$HOME/.claude/skills" "$HOME/.agents/skills"; do
-    [[ -n "$dir" ]] || continue
-    if [[ -d "$dir" || "$dir" == "${SKILL_DIR:-}" ]]; then
-      mkdir -p "$dir/taglens"
-      cp skills/taglens/SKILL.md "$dir/taglens/SKILL.md"
-      echo "Installed skill: $dir/taglens/SKILL.md"
-    fi
-  done
+  taglens skill
 fi

@@ -13,13 +13,30 @@
 
 ## 安装
 
+### 方式一：一键安装预编译二进制 + AI Skill（macOS / Linux）
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/yuxuetr/changelog/main/scripts/get.sh | sh
+```
+
+### 方式二：通过 Cargo 安装（crates.io 或 GitHub）
+
 需要 Rust 1.88+（edition 2024）和系统已安装的 `git`。
 
 ```bash
-# 从 GitHub 安装
+# 从 crates.io 安装（发布后可用）
+cargo install taglens --locked
+
+# 或从 GitHub 安装最新主干
 cargo install --git https://github.com/yuxuetr/changelog --locked
 
-# 或者克隆后本地安装（加 --skill 会同步安装 AI Skill 到 ~/.gemini/skills、~/.claude/skills 等目录）
+# 将内置的 AI Skill（SKILL.md）一键安装到本机 Claude Code / Gemini / Codex / agy 的 skills 目录
+taglens skill
+```
+
+### 方式三：克隆源码安装
+
+```bash
 git clone https://github.com/yuxuetr/changelog && cd changelog
 scripts/install.sh --skill
 ```
