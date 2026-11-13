@@ -16,3 +16,4 @@
 | 12 | 编写 `skills/taglens/SKILL.md`，更新 `scripts/install.sh`、`README.md` 与 `AGENTS.md` | DONE（新增 SKILL.md 与 --skill 安装支持，同步更新文档） |
 | 13 | 内置 `taglens skill` 子命令（编译期嵌入 `SKILL.md`，支持一键安装 Skill 或 `--print` 输出） | DONE（已嵌入 SKILL.md 并通过单元测试） |
 | 14 | 补齐 `LICENSE`（MIT）、crates.io 打包元数据、GitHub Actions（CI + 跨平台二进制 Release）与一键安装脚本 `scripts/get.sh` | DONE（已通过 cargo package 校验并配置 CI/Release 工作流） |
+| 15 | 全面重命名为 `git-changes`（支持 `git changes` 原生子命令调用，同步更新包名、二进制名、Skill 与全部文档） | DONE（已更新全部引用并通过校验） |

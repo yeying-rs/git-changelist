@@ -42,30 +42,30 @@ jobs:
       - name: Package (Unix)
         if: matrix.archive == 'tar.gz'
         run: |
-          stage="taglens-${{ github.ref_name }}-${{ matrix.target }}"
-          mkdir -p "$stage/skills/taglens"
-          cp "target/${{ matrix.target }}/release/taglens" "$stage/"
+          stage="git-changes-${{ github.ref_name }}-${{ matrix.target }}"
+          mkdir -p "$stage/skills/git-changes"
+          cp "target/${{ matrix.target }}/release/git-changes" "$stage/"
           cp README.md LICENSE "$stage/"
-          cp skills/taglens/SKILL.md "$stage/skills/taglens/SKILL.md"
+          cp skills/git-changes/SKILL.md "$stage/skills/git-changes/SKILL.md"
           tar -czf "${stage}.tar.gz" "$stage"
-          cp "${stage}.tar.gz" "taglens-${{ matrix.target }}.tar.gz"
+          cp "${stage}.tar.gz" "git-changes-${{ matrix.target }}.tar.gz"
       - name: Package (Windows)
         if: matrix.archive == 'zip'
         shell: pwsh
         run: |
-          $stage = "taglens-${{ github.ref_name }}-${{ matrix.target }}"
-          New-Item -ItemType Directory -Force -Path "$stage/skills/taglens" | Out-Null
-          Copy-Item "target/${{ matrix.target }}/release/taglens.exe" "$stage/"
+          $stage = "git-changes-${{ github.ref_name }}-${{ matrix.target }}"
+          New-Item -ItemType Directory -Force -Path "$stage/skills/git-changes" | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/git-changes.exe" "$stage/"
           Copy-Item README.md, LICENSE "$stage/"
-          Copy-Item skills/taglens/SKILL.md "$stage/skills/taglens/SKILL.md"
+          Copy-Item skills/git-changes/SKILL.md "$stage/skills/git-changes/SKILL.md"
           Compress-Archive -Path "$stage" -DestinationPath "${stage}.zip"
-          Copy-Item "${stage}.zip" "taglens-${{ matrix.target }}.zip"
+          Copy-Item "${stage}.zip" "git-changes-${{ matrix.target }}.zip"
       - uses: actions/upload-artifact@v4
         with:
           name: artifacts-${{ matrix.target }}
           path: |
-            taglens-*.tar.gz
-            taglens-*.zip
+            git-changes-*.tar.gz
+            git-changes-*.zip
 
   publish:
     needs: build
@@ -85,4 +85,4 @@ jobs:
         with:
           body_path: RELEASE_NOTES.md
           files: |
-            dist/taglens-*
+            dist/git-changes-*

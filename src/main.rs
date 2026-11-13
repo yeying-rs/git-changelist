@@ -250,7 +250,7 @@ fn write_output(path: Option<&std::path::Path>, output: &str) -> Result<()> {
   Ok(())
 }
 
-const SKILL_MD: &str = include_str!("../skills/taglens/SKILL.md");
+const SKILL_MD: &str = include_str!("../skills/git-changes/SKILL.md");
 
 fn run_skill(dir: Option<&std::path::Path>, print: bool) -> Result<String> {
   if print {
@@ -283,10 +283,10 @@ fn run_skill(dir: Option<&std::path::Path>, print: bool) -> Result<String> {
 
   let mut out = String::new();
   for root in roots {
-    let target_dir = if root.file_name().is_some_and(|n| n == "taglens") {
+    let target_dir = if root.file_name().is_some_and(|n| n == "git-changes") {
       root
     } else {
-      root.join("taglens")
+      root.join("git-changes")
     };
     std::fs::create_dir_all(&target_dir)
       .with_context(|| format!("无法创建目录 {}", target_dir.display()))?;
@@ -318,18 +318,18 @@ mod tests {
   fn range_accepts_dots_or_two_values() {
     let expected = Some(("v0.5.1.1".to_string(), "v0.5.4.1".to_string()));
     assert_eq!(
-      cli_range(&["taglens", ".", "--range", "v0.5.1.1..v0.5.4.1"]),
+      cli_range(&["git-changes", ".", "--range", "v0.5.1.1..v0.5.4.1"]),
       Ok(expected.clone())
     );
     assert_eq!(
-      cli_range(&["taglens", ".", "--range", "v0.5.1.1", "v0.5.4.1"]),
+      cli_range(&["git-changes", ".", "--range", "v0.5.1.1", "v0.5.4.1"]),
       Ok(expected)
     );
-    assert_eq!(cli_range(&["taglens", "."]), Ok(None));
+    assert_eq!(cli_range(&["git-changes", "."]), Ok(None));
     // `--range A..B PATH` swallows PATH as a second value; say so instead of misreading it.
-    let swallowed = cli_range(&["taglens", "--range", "v1..v2", "."]).unwrap_err();
+    let swallowed = cli_range(&["git-changes", "--range", "v1..v2", "."]).unwrap_err();
     assert!(swallowed.contains("放在 --range 前面"), "{swallowed}");
-    let trailing = Cli::try_parse_from(["taglens", "--range", "a", "b", "repo"]).unwrap();
+    let trailing = Cli::try_parse_from(["git-changes", "--range", "a", "b", "repo"]).unwrap();
     assert_eq!(trailing.target, "repo");
     assert_eq!(
       range_from(trailing.range),
@@ -340,12 +340,12 @@ mod tests {
   #[test]
   fn skill_subcommand_prints_or_writes_embedded_skill_md() {
     let printed = run_skill(None, true).unwrap();
-    assert!(printed.starts_with("---\nname: taglens\n"));
+    assert!(printed.starts_with("---\nname: git-changes\n"));
 
-    let dir = std::env::temp_dir().join(format!("taglens-skill-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("git-changes-skill-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let msg = run_skill(Some(&dir), false).unwrap();
-    let installed = dir.join("taglens").join("SKILL.md");
+    let installed = dir.join("git-changes").join("SKILL.md");
     assert!(msg.contains(&installed.display().to_string()));
     assert_eq!(std::fs::read_to_string(&installed).unwrap(), SKILL_MD);
     let _ = std::fs::remove_dir_all(&dir);

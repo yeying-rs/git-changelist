@@ -1,15 +1,16 @@
-# taglens
+# git-changes
 
 按 Tag / Release 查看仓库每个版本相对上一版本带来了哪些改变，并把提交自动归类为
 **破坏性变更 / 新增功能 / 问题修复 / 性能优化 / 重构 / 文档 / 维护 / 其他**，
-帮助你在升级前快速了解「从 A 升到 B 会发生什么」。
+帮助你在升级前快速了解「从 A 升到 B 会发生什么」，或供 AI 工具排查版本问题。
+安装后既可直接运行 `git-changes`，也可作为 Git 原生子命令运行 **`git changes`**。
 
 - 支持**本地仓库路径**和 **GitHub 地址**（`https://…`、`git@…`、`owner/repo`）
 - `--range A B` 按中间每个版本分段，每条变化标注到引入它的 Tag 上
 - 识别 Conventional Commits，也能处理自由格式与中文提交信息
 - 输出终端彩色文本、精简升级清单（brief）、Markdown 或 JSON，可写入文件
 - 适配 monorepo（`react@0.1.0`、`tokio-macros-2.x` 等多前缀 Tag）与 hotfix 分支
-- **面向 AI 与版本排查**：内置 `find`（反查提交最早 Tag 与 hotfix 回移）、`which`（定位提交所属版本）、`deps`（锁文件依赖对比）、`--files` / `--path` / `--grep` 及 [`skills/taglens/SKILL.md`](skills/taglens/SKILL.md)
+- **面向 AI 与版本排查**：内置 `find`（反查提交最早 Tag 与 hotfix 回移）、`which`（定位提交所属版本）、`deps`（锁文件依赖对比）、`--files` / `--path` / `--grep` 及 [`skills/git-changes/SKILL.md`](skills/git-changes/SKILL.md)
 
 ## 安装
 
@@ -25,13 +26,13 @@ curl -fsSL https://raw.githubusercontent.com/yuxuetr/changelog/main/scripts/get.
 
 ```bash
 # 从 crates.io 安装（发布后可用）
-cargo install taglens --locked
+cargo install git-changes --locked
 
 # 或从 GitHub 安装最新主干
 cargo install --git https://github.com/yuxuetr/changelog --locked
 
 # 将内置的 AI Skill（SKILL.md）一键安装到本机 Claude Code / Gemini / Codex / agy 的 skills 目录
-taglens skill
+git-changes skill
 ```
 
 ### 方式三：克隆源码安装
@@ -44,16 +45,16 @@ scripts/install.sh --skill
 ## 快速开始
 
 ```bash
-taglens                                            # 当前仓库，最近 5 个版本
-taglens /path/to/repo -n 10 --unreleased           # 最近 10 个版本 + 尚未发布的提交
-taglens BurntSushi/ripgrep                         # 直接查看 GitHub 仓库
-taglens . --range v0.5.1.1 v0.5.4.1                # 两个版本之间，按版本分段
+git changes                                        # 当前仓库，最近 5 个版本（等价于 git-changes）
+git changes /path/to/repo -n 10 --unreleased       # 最近 10 个版本 + 尚未发布的提交
+git changes BurntSushi/ripgrep                     # 直接查看 GitHub 仓库
+git changes . --range v0.5.1.1 v0.5.4.1            # 两个版本之间，按版本分段
 ```
 
 ### 看升级带来的改变（推荐）
 
 ```bash
-taglens . --range v0.5.1.1 v0.5.4.1 -f brief --oldest-first --max-commits 1000
+git changes . --range v0.5.1.1 v0.5.4.1 -f brief --oldest-first --max-commits 1000
 ```
 
 ```text
@@ -76,25 +77,25 @@ v0.5.4.1（v0.5.4 → v0.5.4.1，46 个提交）
 
 ```bash
 # 1. 这个修复 / PR / 提交最早进了哪个版本？有没有 cherry-pick 回移到 hotfix 分支？
-taglens find "#6596" /path/to/repo
-taglens find a1b2c3d /path/to/repo -f json
+git changes find "#6596" /path/to/repo
+git changes find a1b2c3d /path/to/repo -f json
 
 # 2. 线上跑的 commit SHA 属于哪个版本？距离前一个 Tag 几个提交？
-taglens which a1b2c3d /path/to/repo
+git changes which a1b2c3d /path/to/repo
 
 # 3. 两个版本之间哪些依赖锁文件（Cargo.lock / uv.lock / package-lock.json / go.sum）变了？
-taglens deps v0.5.1.1 v0.5.4.1 /path/to/repo
+git changes deps v0.5.1.1 v0.5.4.1 /path/to/repo
 
 # 4. 只看某个目录/模块或某个关键词的变更，并附带每个提交改动的文件与增删行数
-taglens . --range v0.5.1.1 v0.5.4.1 --path src/core --grep timeout --files -f json
+git changes . --range v0.5.1.1 v0.5.4.1 --path src/core --grep timeout --files -f json
 ```
 
 ### 导出
 
 ```bash
-taglens . --range v1.0.0 v1.3.0 -f markdown -o CHANGES.md   # 带 compare / PR / commit 链接
-taglens . --range v1.0.0 v1.3.0 -f json -o changes.json     # 供脚本处理
-taglens owner/repo -f brief --lang en -o UPGRADE.txt        # 英文分类名
+git changes . --range v1.0.0 v1.3.0 -f markdown -o CHANGES.md   # 带 compare / PR / commit 链接
+git changes . --range v1.0.0 v1.3.0 -f json -o changes.json     # 供脚本或 AI 处理
+git changes owner/repo -f brief --lang en -o UPGRADE.txt        # 英文分类名
 ```
 
 ## 参数

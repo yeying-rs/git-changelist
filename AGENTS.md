@@ -5,7 +5,7 @@ Human-facing docs live in [README.md](README.md); design rationale in [docs/desi
 
 ## What this is
 
-`taglens` is a Rust CLI. Given a local repo path or a GitHub URL/`owner/repo`, it lists, per tag/release,
+`git-changes` (invokable as `git-changes` or `git changes`) is a Rust CLI. Given a local repo path or a GitHub URL/`owner/repo`, it lists, per tag/release,
 the commits since the previous version and classifies them (breaking / feature / fix / perf / refactor /
 docs / chore / other). Output: coloured text, `brief` upgrade list, Markdown, JSON.
 
@@ -13,14 +13,14 @@ docs / chore / other). Output: coloured text, `brief` upgrade list, Markdown, JS
 
 | File | Responsibility |
 | --- | --- |
-| `src/main.rs` | clap CLI + subcommands (`find`, `which`, `deps`), target dispatch, `--range` parsing, output writing |
+| `src/main.rs` | clap CLI + subcommands (`find`, `which`, `deps`, `skill`), target dispatch, `--range` parsing, output writing |
 | `src/model.rs` | Plain data: `RawCommit`, `Commit`, `Trailer`, `FileChange`, `Report`, `FindReport`, `WhichReport`, `DepsReport` |
 | `src/classify.rs` | `RawCommit` → `Commit`: Conventional Commits, zh/en heuristics, `classified_by`, trailers, revert linking, `--grep` |
 | `src/local.rs` | Local collector via `git`: tag listing, `--range` splitting, `--numstat` files, `find`, `which`, `deps` lockfile diff |
 | `src/github.rs` | GitHub collector: `git ls-remote` for tags, REST for releases/compare; slug parsing; version ordering |
 | `src/render.rs` | `text` / `brief` / `markdown` / `find_text` / `which_text` / `deps_text` renderers and zh/en labels |
-| `skills/taglens/SKILL.md` | Agent skill instructing external AI tools how to query `taglens` and interpret its JSON fact contract |
-| `scripts/` | `check.sh` (quality gate), `build.sh`, `install.sh` (`--skill`), `release.sh` |
+| `skills/git-changes/SKILL.md` | Agent skill instructing external AI tools how to query `git-changes` and interpret its JSON fact contract |
+| `scripts/` | `check.sh` (quality gate), `build.sh`, `install.sh` (`--skill`), `get.sh`, `release.sh` |
 
 Modules talk only through `model.rs` data. There is deliberately **no trait** over the two collectors —
 they fetch data too differently; don't add one until a third source exists.
@@ -55,7 +55,7 @@ Sandboxed agents that cannot write to the global cargo target dir (`~/.cargo/con
   Use `commit_file` (real diff) when patch identity matters — `--allow-empty` commits share an empty patch,
   and a same-second `cherry-pick` without `-x` can reproduce the original SHA.
 - GitHub-mode logic is tested through pure functions (`parse_slug`, `group_tags`, `split_range`,
-  `compare_versions`). Network calls are verified manually, e.g. `taglens BurntSushi/ripgrep -n 2`.
+  `compare_versions`). Network calls are verified manually, e.g. `git-changes BurntSushi/ripgrep -n 2`.
 - If you add an HTTP test against a local server, build the client with `reqwest::Client::builder().no_proxy()`
   — dev machines often have a system proxy that black-holes loopback requests.
 

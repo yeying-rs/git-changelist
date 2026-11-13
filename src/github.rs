@@ -98,7 +98,7 @@ struct ApiRepo {
 impl GitHub {
   pub fn new(token: Option<String>) -> Result<Self> {
     let client = Client::builder()
-      .user_agent(concat!("taglens/", env!("CARGO_PKG_VERSION")))
+      .user_agent(concat!("git-changes/", env!("CARGO_PKG_VERSION")))
       .timeout(Duration::from_secs(30))
       .build()
       .context("无法创建 HTTP 客户端")?;

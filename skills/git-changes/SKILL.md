@@ -1,11 +1,11 @@
 ---
-name: taglens
-description: Extract verifiable Git/GitHub version facts (per-tag changelog, upgrade diffs across release and hotfix branches, earliest tag & cherry-pick backport lookup, commit-to-version mapping, and lockfile dependency diffs) via the `taglens` CLI. Use whenever investigating software version changes, upgrade risks, regressions between tags, whether a fix/PR shipped in a release or hotfix branch, or dependency changes between versions.
+name: git-changes
+description: Extract verifiable Git/GitHub version facts (per-tag changelog, upgrade diffs across release and hotfix branches, earliest tag & cherry-pick backport lookup, commit-to-version mapping, and lockfile dependency diffs) via the `git-changes` (`git changes`) CLI. Use whenever investigating software version changes, upgrade risks, regressions between tags, whether a fix/PR shipped in a release or hotfix branch, or dependency changes between versions.
 ---
 
-# taglens Skill
+# git-changes Skill
 
-`taglens` is a deterministic, fact-only CLI (no internal LLM) that extracts verifiable version history and commit metadata from local Git repositories or GitHub (`owner/repo` or URL).
+`git-changes` (also invokable as `git changes`) is a deterministic, fact-only CLI (no internal LLM) that extracts verifiable version history and commit metadata from local Git repositories or GitHub (`owner/repo` or URL).
 
 ## 1. Question → Command Mapping
 
@@ -13,13 +13,13 @@ Always pass `-f json` when you need structured fields (`body`, `trailers`, `reve
 
 | Investigation Question | Command |
 | --- | --- |
-| **What changed between version A and B** (segmented by every intermediate tag, including hotfix branches, with cherry-picks deduplicated)? | `taglens <REPO> --range <A> <B> --oldest-first --max-commits 1000 -f json` |
-| **What changed in a specific directory/module between A and B?** | `taglens <REPO> --range <A> <B> --path <DIR_OR_FILE> --files -f json` |
-| **Which commits between A and B mention a keyword, error, or PR?** | `taglens <REPO> --range <A> <B> --grep "<KEYWORD>" --files -f json` |
-| **Which release first included a commit / PR / fix, and was it backported to a hotfix branch?** | `taglens find "<SHA_OR_#PR_OR_KEYWORD>" <REPO> -f json` |
-| **Which version is a deployed commit SHA on (exact tag, nearest ancestor tag + distance, earliest containing tag)?** | `taglens which <REV> <REPO> -f json` |
-| **Which dependencies (`Cargo.lock`, `uv.lock`, `package-lock.json`, `go.sum`) changed between A and B?** | `taglens deps <A> <B> <REPO> -f json` |
-| **Inspect a remote GitHub repository without cloning** | `taglens <owner/repo> --range <A> <B> -f json` |
+| **What changed between version A and B** (segmented by every intermediate tag, including hotfix branches, with cherry-picks deduplicated)? | `git-changes <REPO> --range <A> <B> --oldest-first --max-commits 1000 -f json` |
+| **What changed in a specific directory/module between A and B?** | `git-changes <REPO> --range <A> <B> --path <DIR_OR_FILE> --files -f json` |
+| **Which commits between A and B mention a keyword, error, or PR?** | `git-changes <REPO> --range <A> <B> --grep "<KEYWORD>" --files -f json` |
+| **Which release first included a commit / PR / fix, and was it backported to a hotfix branch?** | `git-changes find "<SHA_OR_#PR_OR_KEYWORD>" <REPO> -f json` |
+| **Which version is a deployed commit SHA on (exact tag, nearest ancestor tag + distance, earliest containing tag)?** | `git-changes which <REV> <REPO> -f json` |
+| **Which dependencies (`Cargo.lock`, `uv.lock`, `package-lock.json`, `go.sum`) changed between A and B?** | `git-changes deps <A> <B> <REPO> -f json` |
+| **Inspect a remote GitHub repository without cloning** | `git-changes <owner/repo> --range <A> <B> -f json` |
 
 ## 2. Interpreting the JSON Fact Contract (`schema_version: 1`)
 
@@ -54,9 +54,9 @@ Always pass `-f json` when you need structured fields (`body`, `trailers`, `reve
 
 ## 3. Recommended Investigation Workflow
 
-1. **Locate version boundaries**: If the user gives a commit SHA, run `taglens which <SHA> <REPO> -f json`. If they ask when a fix/bug landed, run `taglens find "<query>" <REPO> -f json`.
+1. **Locate version boundaries**: If the user gives a commit SHA, run `git-changes which <SHA> <REPO> -f json`. If they ask when a fix/bug landed, run `git-changes find "<query>" <REPO> -f json`.
 2. **Inspect range + lockfiles**: For upgrade or regression analysis between `A` and `B`, run:
-   - `taglens <REPO> --range <A> <B> --oldest-first --files --max-commits 1000 -f json`
-   - `taglens deps <A> <B> <REPO> -f json`
+   - `git-changes <REPO> --range <A> <B> --oldest-first --files --max-commits 1000 -f json`
+   - `git-changes deps <A> <B> <REPO> -f json`
 3. **Check `warnings` and `reverted_by`**: Filter out or flag changes that were reverted within the same window, and check if any version was truncated.
-4. **Drill into suspicious commits**: Once `taglens` narrows candidates to specific SHAs and file paths, run `git -C <REPO> show <SHA> -- <PATH>` to inspect the exact diff.
+4. **Drill into suspicious commits**: Once `git-changes` narrows candidates to specific SHAs and file paths, run `git -C <REPO> show <SHA> -- <PATH>` to inspect the exact diff.

@@ -689,7 +689,7 @@ mod tests {
 
   impl TempRepo {
     fn new(name: &str) -> Self {
-      let dir = std::env::temp_dir().join(format!("taglens-{name}-{}", std::process::id()));
+      let dir = std::env::temp_dir().join(format!("git-changes-{name}-{}", std::process::id()));
       let _ = std::fs::remove_dir_all(&dir);
       std::fs::create_dir_all(&dir).unwrap();
       let repo = TempRepo(dir);
@@ -970,7 +970,7 @@ mod tests {
 
   #[test]
   fn non_repo_is_an_error() {
-    let dir = std::env::temp_dir().join(format!("taglens-norepo-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("git-changes-norepo-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     assert!(collect(&dir, &selection()).is_err());
     let _ = std::fs::remove_dir_all(&dir);
