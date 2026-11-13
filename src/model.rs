@@ -140,3 +140,49 @@ pub struct Selection {
   pub grep: Option<String>,
   pub files: bool,
 }
+
+/// Tags of one prefix series (`v*`, `react@*`, …) that contain a given commit, oldest first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TagSeries {
+  pub prefix: String,
+  pub first_tag: String,
+  pub tags: Vec<String>,
+}
+
+/// A cherry-picked copy of a commit on another branch/release line.
+#[derive(Debug, Clone, Serialize)]
+pub struct Backport {
+  pub commit: Commit,
+  pub first_tag: Option<String>,
+  pub series: Vec<TagSeries>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FoundCommit {
+  pub commit: Commit,
+  pub first_tag: Option<String>,
+  pub series: Vec<TagSeries>,
+  #[serde(skip_serializing_if = "Vec::is_empty")]
+  pub backports: Vec<Backport>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FindReport {
+  pub schema_version: u32,
+  pub source: String,
+  pub query: String,
+  pub matches: Vec<FoundCommit>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WhichReport {
+  pub schema_version: u32,
+  pub source: String,
+  pub rev: String,
+  pub commit: Commit,
+  pub exact_tags: Vec<String>,
+  pub base_tag: Option<String>,
+  pub ahead: usize,
+  pub first_tag: Option<String>,
+  pub contained_in: Vec<TagSeries>,
+}

@@ -8,7 +8,7 @@ use std::io::IsTerminal;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
-use clap::{Parser, ValueEnum};
+use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::github::GitHub;
 use crate::model::Selection;
@@ -16,8 +16,11 @@ use crate::render::Lang;
 
 /// 按 Tag / Release 查看仓库每个版本的提交，并归类为新增功能、问题修复、破坏性变更等。
 #[derive(Debug, Parser)]
-#[command(version, about)]
+#[command(version, about, subcommand_precedence_over_arg = true)]
 struct Cli {
+  #[command(subcommand)]
+  command: Option<Command>,
+
   /// 本地仓库路径，或 GitHub 地址（https://github.com/o/r、git@github.com:o/r.git、o/r）
   #[arg(default_value = ".")]
   target: String,
@@ -67,11 +70,11 @@ struct Cli {
   token: Option<String>,
 
   /// 输出语言
-  #[arg(long, value_enum, default_value = "zh")]
+  #[arg(long, value_enum, default_value = "zh", global = true)]
   lang: Lang,
 
   /// 输出格式（brief：每行「分类: 变化」，适合看升级带来的改变）
-  #[arg(short, long, value_enum, default_value = "text")]
+  #[arg(short, long, value_enum, default_value = "text", global = true)]
   format: Format,
 
   /// 按升级顺序从旧到新排列版本（默认从新到旧）
@@ -79,8 +82,28 @@ struct Cli {
   oldest_first: bool,
 
   /// 写入文件而不是标准输出
-  #[arg(short, long)]
+  #[arg(short, long, global = true)]
   output: Option<PathBuf>,
+}
+
+#[derive(Debug, Subcommand)]
+enum Command {
+  /// 查找某个提交（SHA、#PR 或关键词）最早进入哪个版本，以及是否回移到 hotfix 分支
+  Find {
+    /// 提交 SHA、#PR 编号或标题/正文关键词
+    query: String,
+    /// 本地仓库路径
+    #[arg(default_value = ".")]
+    target: PathBuf,
+  },
+  /// 查看某个提交或引用（如线上运行的 SHA）所处的版本位置与前后 Tag
+  Which {
+    /// 提交 SHA、分支或引用（如 HEAD、a1b2c3d）
+    rev: String,
+    /// 本地仓库路径
+    #[arg(default_value = ".")]
+    target: PathBuf,
+  },
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -121,6 +144,26 @@ fn main() {
 }
 
 fn run(cli: Cli) -> Result<()> {
+  if let Some(command) = cli.command {
+    let output = match command {
+      Command::Find { query, target } => {
+        let report = local::find(&target, &query)?;
+        match cli.format {
+          Format::Json => serde_json::to_string_pretty(&report)? + "\n",
+          _ => render::find_text(&report, cli.lang),
+        }
+      }
+      Command::Which { rev, target } => {
+        let report = local::which(&target, &rev)?;
+        match cli.format {
+          Format::Json => serde_json::to_string_pretty(&report)? + "\n",
+          _ => render::which_text(&report, cli.lang),
+        }
+      }
+    };
+    return write_output(cli.output.as_deref(), &output);
+  }
+
   let selection = Selection {
     limit: cli.limit,
     tag: cli.tag,
@@ -164,7 +207,11 @@ fn run(cli: Cli) -> Result<()> {
     Format::Markdown => render::markdown(&report, cli.lang),
     Format::Json => serde_json::to_string_pretty(&report)? + "\n",
   };
-  match &cli.output {
+  write_output(cli.output.as_deref(), &output)
+}
+
+fn write_output(path: Option<&std::path::Path>, output: &str) -> Result<()> {
+  match path {
     Some(file) => {
       std::fs::write(file, output).with_context(|| format!("无法写入 {}", file.display()))?
     }

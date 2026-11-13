@@ -1,7 +1,7 @@
 //! Local repository collector, driven by the system `git` binary.
 
 use std::cmp::Ordering;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::process::Command;
 
@@ -9,7 +9,10 @@ use anyhow::{Context, Result, bail};
 
 use crate::classify::{classify, link_reverts, matches_grep};
 use crate::github::{compare_versions, parse_slug, tag_prefix};
-use crate::model::{FileChange, RawCommit, Report, SCHEMA_VERSION, Selection, Version};
+use crate::model::{
+  Backport, Commit, FileChange, FindReport, FoundCommit, RawCommit, Report, SCHEMA_VERSION,
+  Selection, TagSeries, Version, WhichReport,
+};
 
 const FIELD: char = '\x1f';
 const RECORD: char = '\x1e';
@@ -102,6 +105,200 @@ pub fn collect(repo: &Path, selection: &Selection) -> Result<Report> {
     warnings,
     versions,
   })
+}
+
+pub fn find(repo: &Path, query: &str) -> Result<FindReport> {
+  git(repo, &["rev-parse", "--git-dir"])
+    .with_context(|| format!("{} 不是 git 仓库", repo.display()))?;
+  let needle = query.trim();
+  if needle.is_empty() {
+    bail!("查询条件不能为空");
+  }
+  let out = git(
+    repo,
+    &[
+      "log",
+      "--all",
+      "--no-merges",
+      "--format=%x1e%H%x1f%an%x1f%as%x1f%s%x1f%b%x1f",
+    ],
+  )?;
+  let all_commits: Vec<Commit> = records(&out)
+    .filter_map(|fields| match fields.as_slice() {
+      [sha, author, date, subject, body, _] => Some(classify(RawCommit {
+        sha: sha.to_string(),
+        author: author.to_string(),
+        date: date.to_string(),
+        subject: subject.to_string(),
+        body: body.to_string(),
+        files: Vec::new(),
+      })),
+      _ => None,
+    })
+    .collect();
+
+  let pr_query = needle.strip_prefix('#').and_then(|s| s.parse::<u64>().ok());
+  let matched: Vec<&Commit> = all_commits
+    .iter()
+    .filter(|c| match pr_query {
+      Some(pr) => c.pr == Some(pr) || c.trailers.iter().any(|t| t.value == needle),
+      None => matches_grep(c, needle),
+    })
+    .collect();
+
+  let matched_shas: HashSet<&str> = matched.iter().map(|c| c.sha.as_str()).collect();
+  let is_pick_of_matched = |c: &Commit| {
+    c.trailers
+      .iter()
+      .filter(|t| t.key == "cherry-picked-from")
+      .any(|t| {
+        matched_shas
+          .iter()
+          .any(|sha| sha.starts_with(&t.value) || t.value.starts_with(sha))
+      })
+  };
+
+  let mut matches = Vec::new();
+  for primary in matched.into_iter().filter(|c| !is_pick_of_matched(c)) {
+    let (first_tag, series) = containing_series(repo, &primary.sha)?;
+    let mut backports = Vec::new();
+    for candidate in &all_commits {
+      if candidate.sha == primary.sha {
+        continue;
+      }
+      let picked_by_trailer = candidate
+        .trailers
+        .iter()
+        .filter(|t| t.key == "cherry-picked-from")
+        .any(|t| primary.sha.starts_with(&t.value) || t.value.starts_with(&primary.sha));
+      let same_subject =
+        candidate.summary == primary.summary && candidate.category == primary.category;
+      if picked_by_trailer || same_subject {
+        let (bp_first, bp_series) = containing_series(repo, &candidate.sha)?;
+        backports.push(Backport {
+          commit: candidate.clone(),
+          first_tag: bp_first,
+          series: bp_series,
+        });
+      }
+    }
+    matches.push(FoundCommit {
+      commit: primary.clone(),
+      first_tag,
+      series,
+      backports,
+    });
+  }
+
+  Ok(FindReport {
+    schema_version: SCHEMA_VERSION,
+    source: canonical_source(repo),
+    query: needle.to_string(),
+    matches,
+  })
+}
+
+pub fn which(repo: &Path, rev: &str) -> Result<WhichReport> {
+  git(repo, &["rev-parse", "--git-dir"])
+    .with_context(|| format!("{} 不是 git 仓库", repo.display()))?;
+  let out = git(
+    repo,
+    &[
+      "log",
+      "-1",
+      "--format=%x1e%H%x1f%an%x1f%as%x1f%s%x1f%b%x1f",
+      rev,
+      "--",
+    ],
+  )
+  .with_context(|| format!("找不到提交或引用：{rev}"))?;
+  let commit = records(&out)
+    .find_map(|fields| match fields.as_slice() {
+      [sha, author, date, subject, body, _] => Some(classify(RawCommit {
+        sha: sha.to_string(),
+        author: author.to_string(),
+        date: date.to_string(),
+        subject: subject.to_string(),
+        body: body.to_string(),
+        files: Vec::new(),
+      })),
+      _ => None,
+    })
+    .with_context(|| format!("无法解析提交：{rev}"))?;
+
+  let points_at = git(repo, &["tag", "--points-at", &commit.sha])?;
+  let mut exact_tags: Vec<String> = points_at
+    .lines()
+    .map(str::trim)
+    .filter(|s| !s.is_empty())
+    .map(str::to_string)
+    .collect();
+  exact_tags.sort_by(|a, b| compare_versions(a, b));
+
+  let (base_tag, ahead) = if let Some(first) = exact_tags.first() {
+    (Some(first.clone()), 0)
+  } else if let Ok(desc) = git(repo, &["describe", "--tags", "--long", &commit.sha]) {
+    let mut parts = desc.trim().rsplitn(3, '-');
+    let _g = parts.next();
+    let ahead = parts.next().and_then(|n| n.parse().ok()).unwrap_or(0);
+    let base = parts.next().map(str::to_string);
+    (base, ahead)
+  } else {
+    (None, 0)
+  };
+
+  let (first_tag, contained_in) = containing_series(repo, &commit.sha)?;
+  Ok(WhichReport {
+    schema_version: SCHEMA_VERSION,
+    source: canonical_source(repo),
+    rev: rev.to_string(),
+    commit,
+    exact_tags,
+    base_tag,
+    ahead,
+    first_tag,
+    contained_in,
+  })
+}
+
+fn canonical_source(repo: &Path) -> String {
+  repo
+    .canonicalize()
+    .unwrap_or_else(|_| repo.to_path_buf())
+    .display()
+    .to_string()
+}
+
+/// Tags containing `sha`, grouped by tag prefix and sorted oldest-version-first within each group.
+fn containing_series(repo: &Path, sha: &str) -> Result<(Option<String>, Vec<TagSeries>)> {
+  let out = git(repo, &["tag", "--contains", sha])?;
+  let mut groups: HashMap<String, Vec<String>> = HashMap::new();
+  for tag in out.lines().map(str::trim).filter(|s| !s.is_empty()) {
+    groups
+      .entry(tag_prefix(tag).to_string())
+      .or_default()
+      .push(tag.to_string());
+  }
+  let mut series: Vec<TagSeries> = groups
+    .into_iter()
+    .filter_map(|(prefix, mut tags)| {
+      tags.sort_by(|a, b| compare_versions(a, b));
+      let first_tag = tags.first()?.clone();
+      Some(TagSeries {
+        prefix,
+        first_tag,
+        tags,
+      })
+    })
+    .collect();
+  series.sort_by(|a, b| {
+    b.tags
+      .len()
+      .cmp(&a.tags.len())
+      .then_with(|| a.prefix.cmp(&b.prefix))
+  });
+  let first_tag = series.first().map(|s| s.first_tag.clone());
+  Ok((first_tag, series))
 }
 
 fn origin_url(repo: &Path) -> Option<String> {
@@ -681,5 +878,77 @@ mod tests {
       by_grep.versions[0].commits[0].summary,
       "memory timeout in a"
     );
+  }
+
+  #[test]
+  fn find_locates_first_tag_and_hotfix_backport() {
+    let repo = TempRepo::new("find-backport");
+    repo.commit_file("a", "feat: base");
+    repo.run(&["tag", "v0.1.0"]);
+    repo.run(&["branch", "hotfix"]);
+    repo.commit_file("b", "fix: null pointer (#42)");
+    let main_sha = git(&repo.0, &["rev-parse", "HEAD"])
+      .unwrap()
+      .trim()
+      .to_string();
+    repo.run(&["tag", "v0.2.0"]);
+    repo.commit_file("c", "feat: later");
+    repo.run(&["tag", "v0.3.0"]);
+
+    repo.run(&["checkout", "-q", "hotfix"]);
+    repo.run(&["cherry-pick", "-x", &main_sha]);
+    let hotfix_sha = git(&repo.0, &["rev-parse", "HEAD"])
+      .unwrap()
+      .trim()
+      .to_string();
+    repo.run(&["tag", "v0.1.1"]);
+
+    // Search by short SHA of the main commit: finds v0.2.0 as first_tag and v0.1.1 as backport.
+    let by_sha = find(&repo.0, &main_sha[..8]).unwrap();
+    assert_eq!(by_sha.matches.len(), 1);
+    let m = &by_sha.matches[0];
+    assert_eq!(m.commit.sha, main_sha);
+    assert_eq!(m.first_tag.as_deref(), Some("v0.2.0"));
+    assert_eq!(m.series[0].tags, ["v0.2.0", "v0.3.0"]);
+    assert_eq!(m.backports.len(), 1);
+    assert_eq!(m.backports[0].commit.sha, hotfix_sha);
+    assert_eq!(m.backports[0].first_tag.as_deref(), Some("v0.1.1"));
+
+    // Search by PR number `#42`: deduplicates the cherry-pick into `backports`.
+    let by_pr = find(&repo.0, "#42").unwrap();
+    assert_eq!(by_pr.matches.len(), 1);
+    assert_eq!(by_pr.matches[0].first_tag.as_deref(), Some("v0.2.0"));
+    assert_eq!(by_pr.matches[0].backports.len(), 1);
+    assert_eq!(
+      by_pr.matches[0].backports[0].first_tag.as_deref(),
+      Some("v0.1.1")
+    );
+  }
+
+  #[test]
+  fn which_identifies_base_tag_ahead_and_containing_tag() {
+    let repo = TempRepo::new("which-rev");
+    repo.commit_file("a", "feat: init");
+    repo.run(&["tag", "v0.1.0"]);
+    repo.commit_file("b", "fix: first");
+    let mid_sha = git(&repo.0, &["rev-parse", "HEAD"])
+      .unwrap()
+      .trim()
+      .to_string();
+    repo.commit_file("c", "feat: second");
+    repo.run(&["tag", "v0.2.0"]);
+    repo.commit_file("d", "feat: unreleased work");
+
+    let mid = which(&repo.0, &mid_sha[..7]).unwrap();
+    assert_eq!(mid.commit.sha, mid_sha);
+    assert!(mid.exact_tags.is_empty());
+    assert_eq!(mid.base_tag.as_deref(), Some("v0.1.0"));
+    assert_eq!(mid.ahead, 1);
+    assert_eq!(mid.first_tag.as_deref(), Some("v0.2.0"));
+
+    let head = which(&repo.0, "HEAD").unwrap();
+    assert_eq!(head.base_tag.as_deref(), Some("v0.2.0"));
+    assert_eq!(head.ahead, 1);
+    assert_eq!(head.first_tag, None, "HEAD is after the latest tag");
   }
 }

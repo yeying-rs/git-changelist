@@ -4,7 +4,7 @@ use std::fmt::Write;
 
 use clap::ValueEnum;
 
-use crate::model::{Category, Commit, Report, Version};
+use crate::model::{Category, Commit, FindReport, Report, Version, WhichReport};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum Lang {
@@ -324,6 +324,70 @@ pub fn markdown(report: &Report, lang: Lang) -> String {
     }
   }
   out
+}
+
+pub fn find_text(report: &FindReport, lang: Lang) -> String {
+  let mut out = format!("{} (query: {})\n", report.source, report.query);
+  if report.matches.is_empty() {
+    let msg = match lang {
+      Lang::Zh => "未找到匹配的提交",
+      Lang::En => "No matching commits found",
+    };
+    let _ = writeln!(out, "  {msg}");
+    return out;
+  }
+  let (unreleased, first_label, backport_label) = match lang {
+    Lang::Zh => ("未发布", "最早包含版本", "回移副本"),
+    Lang::En => ("Unreleased", "First tag", "Backport"),
+  };
+  for m in &report.matches {
+    let sha = m.commit.sha.get(..7).unwrap_or(&m.commit.sha);
+    let pr = m.commit.pr.map(|n| format!(" (#{n})")).unwrap_or_default();
+    let first = m.first_tag.as_deref().unwrap_or(unreleased);
+    let _ = writeln!(
+      out,
+      "\n• {sha} ({}) {}{pr}\n  {first_label}: {first}",
+      m.commit.date, m.commit.summary
+    );
+    for bp in &m.backports {
+      let bp_sha = bp.commit.sha.get(..7).unwrap_or(&bp.commit.sha);
+      let bp_first = bp.first_tag.as_deref().unwrap_or(unreleased);
+      let _ = writeln!(
+        out,
+        "  {backport_label}: {bp_sha} ({}) → {bp_first}",
+        bp.commit.date
+      );
+    }
+  }
+  out
+}
+
+pub fn which_text(report: &WhichReport, lang: Lang) -> String {
+  let (unreleased, none_label, exact_label, base_label, first_label) = match lang {
+    Lang::Zh => ("未发布", "无", "精确 Tag", "前序基准 Tag", "最早包含版本"),
+    Lang::En => (
+      "Unreleased",
+      "none",
+      "Exact tags",
+      "Base tag",
+      "First containing tag",
+    ),
+  };
+  let sha = report.commit.sha.get(..7).unwrap_or(&report.commit.sha);
+  let exact = if report.exact_tags.is_empty() {
+    none_label.to_string()
+  } else {
+    report.exact_tags.join(", ")
+  };
+  let base = match &report.base_tag {
+    Some(tag) => format!("{tag} (+{} commits)", report.ahead),
+    None => none_label.to_string(),
+  };
+  let first = report.first_tag.as_deref().unwrap_or(unreleased);
+  format!(
+    "{}\n• {sha} ({}) {}\n  {exact_label}: {exact}\n  {base_label}: {base}\n  {first_label}: {first}\n",
+    report.source, report.commit.date, report.commit.summary
+  )
 }
 
 #[cfg(test)]
