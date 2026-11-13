@@ -114,6 +114,15 @@ enum Command {
     #[arg(default_value = ".")]
     target: PathBuf,
   },
+  /// 安装内置的 AI Skill（SKILL.md）到本地 AI 工具目录（Claude Code / Gemini / Codex / agy）
+  Skill {
+    /// 指定安装到的 skills 根目录（如 ~/.claude/skills）；不传则自动检测本机已有的 AI 目录
+    #[arg(long, value_name = "DIR")]
+    dir: Option<PathBuf>,
+    /// 仅将内置的 SKILL.md 内容打印到标准输出，不写文件
+    #[arg(long)]
+    print: bool,
+  },
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -177,6 +186,10 @@ fn run(cli: Cli) -> Result<()> {
           _ => render::deps_text(&report, cli.lang),
         }
       }
+      Command::Skill { dir, print } => {
+        let out = run_skill(dir.as_deref(), print)?;
+        return write_output(cli.output.as_deref(), &out);
+      }
     };
     return write_output(cli.output.as_deref(), &output);
   }
@@ -237,6 +250,53 @@ fn write_output(path: Option<&std::path::Path>, output: &str) -> Result<()> {
   Ok(())
 }
 
+const SKILL_MD: &str = include_str!("../skills/taglens/SKILL.md");
+
+fn run_skill(dir: Option<&std::path::Path>, print: bool) -> Result<String> {
+  if print {
+    return Ok(SKILL_MD.to_string());
+  }
+  let roots: Vec<PathBuf> = match dir {
+    Some(d) => vec![d.to_path_buf()],
+    None => {
+      let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .context("无法获取 HOME 目录，请使用 --dir 指定安装路径")?;
+      let candidates = [
+        home.join(".claude/skills"),
+        home.join(".gemini/skills"),
+        home.join(".agents/skills"),
+      ];
+      let existing: Vec<PathBuf> = candidates
+        .iter()
+        .filter(|p| p.is_dir() || p.parent().is_some_and(|parent| parent.is_dir()))
+        .cloned()
+        .collect();
+      if existing.is_empty() {
+        vec![home.join(".agents/skills")]
+      } else {
+        existing
+      }
+    }
+  };
+
+  let mut out = String::new();
+  for root in roots {
+    let target_dir = if root.file_name().is_some_and(|n| n == "taglens") {
+      root
+    } else {
+      root.join("taglens")
+    };
+    std::fs::create_dir_all(&target_dir)
+      .with_context(|| format!("无法创建目录 {}", target_dir.display()))?;
+    let file = target_dir.join("SKILL.md");
+    std::fs::write(&file, SKILL_MD).with_context(|| format!("无法写入 {}", file.display()))?;
+    out.push_str(&format!("已安装 Skill：{}\n", file.display()));
+  }
+  Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -275,5 +335,19 @@ mod tests {
       range_from(trailing.range),
       Ok(Some(("a".into(), "b".into())))
     );
+  }
+
+  #[test]
+  fn skill_subcommand_prints_or_writes_embedded_skill_md() {
+    let printed = run_skill(None, true).unwrap();
+    assert!(printed.starts_with("---\nname: taglens\n"));
+
+    let dir = std::env::temp_dir().join(format!("taglens-skill-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let msg = run_skill(Some(&dir), false).unwrap();
+    let installed = dir.join("taglens").join("SKILL.md");
+    assert!(msg.contains(&installed.display().to_string()));
+    assert_eq!(std::fs::read_to_string(&installed).unwrap(), SKILL_MD);
+    let _ = std::fs::remove_dir_all(&dir);
   }
 }
