@@ -27,7 +27,15 @@ struct Texts {
 
 const ZH: Texts = Texts {
   breaking: "⚠️  破坏性变更",
-  categories: ["✨ 新增功能", "🐛 问题修复", "⚡ 性能优化", "♻️  重构", "📝 文档", "🔧 维护", "📦 其他"],
+  categories: [
+    "✨ 新增功能",
+    "🐛 问题修复",
+    "⚡ 性能优化",
+    "♻️  重构",
+    "📝 文档",
+    "🔧 维护",
+    "📦 其他",
+  ],
   unreleased: "未发布",
   commits: "个提交",
   tag_note: "Tag 说明",
@@ -71,10 +79,16 @@ impl Lang {
 /// Breaking commits get their own leading group and are not repeated in their category.
 fn groups<'a>(version: &'a Version, texts: &Texts) -> Vec<(&'static str, Vec<&'a Commit>)> {
   let breaking: Vec<_> = version.commits.iter().filter(|c| c.breaking).collect();
-  let by_category = Category::ALL.iter().zip(texts.categories).map(|(category, label)| {
-    let commits = version.commits.iter().filter(|c| !c.breaking && c.category == *category);
-    (label, commits.collect::<Vec<_>>())
-  });
+  let by_category = Category::ALL
+    .iter()
+    .zip(texts.categories)
+    .map(|(category, label)| {
+      let commits = version
+        .commits
+        .iter()
+        .filter(|c| !c.breaking && c.category == *category);
+      (label, commits.collect::<Vec<_>>())
+    });
   std::iter::once((texts.breaking, breaking))
     .chain(by_category)
     .filter(|(_, commits)| !commits.is_empty())
@@ -82,7 +96,10 @@ fn groups<'a>(version: &'a Version, texts: &Texts) -> Vec<(&'static str, Vec<&'a
 }
 
 fn version_title(version: &Version, texts: &Texts) -> String {
-  version.tag.clone().unwrap_or_else(|| texts.unreleased.to_string())
+  version
+    .tag
+    .clone()
+    .unwrap_or_else(|| texts.unreleased.to_string())
 }
 
 /// `2026-11-13 · v0.1.0..v0.2.0 · 2 个提交`
@@ -93,7 +110,11 @@ fn version_meta(version: &Version, texts: &Texts) -> String {
     None => texts.first_version.to_string(),
   };
   let count = format!("{} {}", version.total_commits, texts.commits);
-  [version.date.clone(), Some(range), Some(count)].into_iter().flatten().collect::<Vec<_>>().join(" · ")
+  [version.date.clone(), Some(range), Some(count)]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(" · ")
 }
 
 fn truncation_note(version: &Version, texts: &Texts) -> Option<String> {
@@ -107,7 +128,13 @@ fn truncation_note(version: &Version, texts: &Texts) -> Option<String> {
 
 pub fn text(report: &Report, lang: Lang, color: bool) -> String {
   let texts = lang.texts();
-  let paint = |s: &str, code: &str| if color { format!("\x1b[{code}m{s}\x1b[0m") } else { s.to_string() };
+  let paint = |s: &str, code: &str| {
+    if color {
+      format!("\x1b[{code}m{s}\x1b[0m")
+    } else {
+      s.to_string()
+    }
+  };
   let mut out = String::new();
 
   let _ = writeln!(out, "{}", paint(&report.source, "1"));
@@ -123,10 +150,21 @@ pub fn text(report: &Report, lang: Lang, color: bool) -> String {
       paint(&version_meta(version, texts), "2")
     );
     if let Some(note) = &version.tag_message {
-      let _ = writeln!(out, "  {}: {}", paint(texts.tag_note, "1"), note.replace('\n', "\n    "));
+      let _ = writeln!(
+        out,
+        "  {}: {}",
+        paint(texts.tag_note, "1"),
+        note.replace('\n', "\n    ")
+      );
     }
     if let Some(release) = &version.release {
-      let _ = writeln!(out, "  {}: {}  {}", paint(texts.release, "1"), release.name, paint(&release.url, "2"));
+      let _ = writeln!(
+        out,
+        "  {}: {}  {}",
+        paint(texts.release, "1"),
+        release.name,
+        paint(&release.url, "2")
+      );
       for line in release.body.lines().filter(|l| !l.trim().is_empty()) {
         let _ = writeln!(out, "    {}", paint(line.trim_end(), "2"));
       }
@@ -139,10 +177,19 @@ pub fn text(report: &Report, lang: Lang, color: bool) -> String {
       let code = if label == texts.breaking { "1;31" } else { "1" };
       let _ = writeln!(out, "  {} ({})", paint(label, code), commits.len());
       for commit in commits {
-        let scope = commit.scope.as_ref().map(|s| format!("[{s}] ")).unwrap_or_default();
+        let scope = commit
+          .scope
+          .as_ref()
+          .map(|s| format!("[{s}] "))
+          .unwrap_or_default();
         let pr = commit.pr.map(|n| format!(" (#{n})")).unwrap_or_default();
         let sha = commit.sha.get(..7).unwrap_or(&commit.sha);
-        let _ = writeln!(out, "    • {scope}{}{pr}  {}", commit.summary, paint(sha, "2"));
+        let _ = writeln!(
+          out,
+          "    • {scope}{}{pr}  {}",
+          commit.summary,
+          paint(sha, "2")
+        );
       }
     }
     if let Some(note) = truncation_note(version, texts) {
@@ -197,7 +244,11 @@ mod tests {
     let feature = out.find("新增功能").unwrap();
     let fix = out.find("问题修复").unwrap();
     assert!(breaking < feature && feature < fix, "{out}");
-    assert_eq!(out.matches("drop api").count(), 1, "breaking commit listed once");
+    assert_eq!(
+      out.matches("drop api").count(),
+      1,
+      "breaking commit listed once"
+    );
     assert!(out.contains("v0.9.0..v1.0.0"));
     assert!(out.contains("仅显示 3 / 共 5 个提交"));
     assert!(!out.contains('\x1b'));

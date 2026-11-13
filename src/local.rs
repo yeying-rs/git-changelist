@@ -6,6 +6,7 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 
 use crate::classify::classify;
+use crate::github::{parse_slug, tag_prefix};
 use crate::model::{RawCommit, Report, Selection, Version};
 
 const FIELD: char = '\x1f';
@@ -30,13 +31,17 @@ pub fn collect(repo: &Path, selection: &Selection) -> Result<Report> {
     if !tags.iter().any(|t| &t.name == tag) {
       bail!("找不到 Tag：{tag}");
     }
-    ranges.push((Some(tag.clone()), previous_tag(repo, &format!("{tag}^"))));
+    ranges.push((
+      Some(tag.clone()),
+      previous_tag(repo, &format!("{tag}^"), Some(tag)),
+    ));
   } else {
     if selection.unreleased || tags.is_empty() {
-      ranges.push((None, previous_tag(repo, "HEAD")));
+      ranges.push((None, previous_tag(repo, "HEAD", None)));
     }
     for tag in tags.iter().take(selection.limit) {
-      ranges.push((Some(tag.name.clone()), previous_tag(repo, &format!("{}^", tag.name))));
+      let previous = previous_tag(repo, &format!("{}^", tag.name), Some(&tag.name));
+      ranges.push((Some(tag.name.clone()), previous));
     }
   }
 
@@ -52,11 +57,16 @@ pub fn collect(repo: &Path, selection: &Selection) -> Result<Report> {
     if tag.is_none() && total_commits == 0 && !tags.is_empty() {
       continue;
     }
-    let info = tag.as_ref().and_then(|name| tags.iter().find(|t| &t.name == name));
+    let info = tag
+      .as_ref()
+      .and_then(|name| tags.iter().find(|t| &t.name == name));
     versions.push(Version {
       date: info.map(|t| t.date.clone()),
       tag_message: info.and_then(|t| t.message.clone()),
-      commits: log(repo, &range, selection)?.into_iter().map(classify).collect(),
+      commits: log(repo, &range, selection)?
+        .into_iter()
+        .map(classify)
+        .collect(),
       total_commits,
       release: None,
       tag,
@@ -66,14 +76,15 @@ pub fn collect(repo: &Path, selection: &Selection) -> Result<Report> {
 
   Ok(Report {
     source: repo.display().to_string(),
-    github: origin_url(repo),
+    github: origin_url(repo).as_deref().and_then(parse_slug),
     versions,
   })
 }
 
-/// `origin` remote URL, if any; the caller decides whether it is a GitHub repo.
-pub fn origin_url(repo: &Path) -> Option<String> {
-  git(repo, &["remote", "get-url", "origin"]).ok().map(|s| s.trim().to_string())
+fn origin_url(repo: &Path) -> Option<String> {
+  git(repo, &["remote", "get-url", "origin"])
+    .ok()
+    .map(|s| s.trim().to_string())
 }
 
 fn list_tags(repo: &Path) -> Result<Vec<Tag>> {
@@ -82,7 +93,13 @@ fn list_tags(repo: &Path) -> Result<Vec<Tag>> {
   // The last --sort key is primary; version order breaks ties between same-second tags.
   let out = git(
     repo,
-    &["for-each-ref", "--sort=-v:refname", "--sort=-creatordate", format, "refs/tags"],
+    &[
+      "for-each-ref",
+      "--sort=-v:refname",
+      "--sort=-creatordate",
+      format,
+      "refs/tags",
+    ],
   )?;
   Ok(
     records(&out)
@@ -102,8 +119,13 @@ fn list_tags(repo: &Path) -> Result<Vec<Tag>> {
 }
 
 /// Nearest tag reachable from `rev`; `None` when there is none (e.g. the first tag).
-fn previous_tag(repo: &Path, rev: &str) -> Option<String> {
-  git(repo, &["describe", "--tags", "--abbrev=0", rev]).ok().map(|s| s.trim().to_string())
+/// With `like`, only tags sharing its prefix count, so monorepo crates don't interleave.
+fn previous_tag(repo: &Path, rev: &str, like: Option<&str>) -> Option<String> {
+  let pattern = like.map(|tag| format!("--match={}[0-9]*", tag_prefix(tag)));
+  let mut args = vec!["describe", "--tags", "--abbrev=0"];
+  args.extend(pattern.as_deref());
+  args.push(rev);
+  git(repo, &args).ok().map(|s| s.trim().to_string())
 }
 
 fn count_commits(repo: &Path, range: &str, merges: bool) -> Result<usize> {
@@ -113,7 +135,10 @@ fn count_commits(repo: &Path, range: &str, merges: bool) -> Result<usize> {
   }
   args.extend(["--end-of-options", range]);
   let out = git(repo, &args)?;
-  out.trim().parse().with_context(|| format!("无法解析提交数：{out}"))
+  out
+    .trim()
+    .parse()
+    .with_context(|| format!("无法解析提交数：{out}"))
 }
 
 fn log(repo: &Path, range: &str, selection: &Selection) -> Result<Vec<RawCommit>> {
@@ -249,7 +274,14 @@ mod tests {
   #[test]
   fn unreleased_range_starts_at_latest_reachable_tag() {
     let repo = sample_repo("unreleased");
-    let report = collect(&repo.0, &Selection { unreleased: true, ..selection() }).unwrap();
+    let report = collect(
+      &repo.0,
+      &Selection {
+        unreleased: true,
+        ..selection()
+      },
+    )
+    .unwrap();
     let unreleased = &report.versions[0];
     assert_eq!(unreleased.tag, None);
     assert_eq!(unreleased.previous.as_deref(), Some("v0.2.0"));
@@ -259,22 +291,59 @@ mod tests {
   #[test]
   fn tag_range_and_limit_selection() {
     let repo = sample_repo("select");
-    let one = collect(&repo.0, &Selection { tag: Some("v0.2.0".into()), ..selection() }).unwrap();
+    let one = collect(
+      &repo.0,
+      &Selection {
+        tag: Some("v0.2.0".into()),
+        ..selection()
+      },
+    )
+    .unwrap();
     assert_eq!(one.versions.len(), 1);
-    assert!(collect(&repo.0, &Selection { tag: Some("nope".into()), ..selection() }).is_err());
+    assert!(
+      collect(
+        &repo.0,
+        &Selection {
+          tag: Some("nope".into()),
+          ..selection()
+        }
+      )
+      .is_err()
+    );
 
     let range = Some(("v0.1.0".to_string(), "HEAD".to_string()));
-    let ranged = collect(&repo.0, &Selection { range, ..selection() }).unwrap();
+    let ranged = collect(
+      &repo.0,
+      &Selection {
+        range,
+        ..selection()
+      },
+    )
+    .unwrap();
     assert_eq!(ranged.versions[0].total_commits, 3);
 
-    let limited = collect(&repo.0, &Selection { limit: 1, ..selection() }).unwrap();
+    let limited = collect(
+      &repo.0,
+      &Selection {
+        limit: 1,
+        ..selection()
+      },
+    )
+    .unwrap();
     assert_eq!(limited.versions.len(), 1);
   }
 
   #[test]
   fn max_commits_truncates_but_keeps_total() {
     let repo = sample_repo("truncate");
-    let report = collect(&repo.0, &Selection { max_commits: 1, ..selection() }).unwrap();
+    let report = collect(
+      &repo.0,
+      &Selection {
+        max_commits: 1,
+        ..selection()
+      },
+    )
+    .unwrap();
     assert_eq!(report.versions[0].commits.len(), 1);
     assert_eq!(report.versions[0].total_commits, 2);
   }
@@ -287,6 +356,24 @@ mod tests {
     assert_eq!(report.versions.len(), 1);
     assert_eq!(report.versions[0].tag, None);
     assert_eq!(report.versions[0].total_commits, 1);
+  }
+
+  #[test]
+  fn monorepo_previous_tag_shares_prefix() {
+    let repo = TempRepo::new("monorepo");
+    repo.commit("feat: core");
+    repo.run(&["tag", "core-0.1.0"]);
+    repo.commit("feat: macros");
+    repo.run(&["tag", "macros-0.1.0"]);
+    repo.commit("fix: core bug");
+    repo.run(&["tag", "core-0.2.0"]);
+    let selection = Selection {
+      tag: Some("core-0.2.0".into()),
+      ..selection()
+    };
+    let report = collect(&repo.0, &selection).unwrap();
+    assert_eq!(report.versions[0].previous.as_deref(), Some("core-0.1.0"));
+    assert_eq!(report.versions[0].total_commits, 2);
   }
 
   #[test]

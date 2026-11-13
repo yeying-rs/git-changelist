@@ -46,10 +46,11 @@ flowchart LR
 | 读本地仓库 | 调用系统 `git`，用 `\x1f`/`\x1e` 分隔字段解析 | 需在无 git 环境运行，或扫描耗时 > 500ms |
 | 本地「上一个 Tag」 | `git describe --tags --abbrev=0 <tag>^`（拓扑上最近的可达 Tag，天然适配多发布线） | — |
 | 本地版本顺序 | `for-each-ref --sort=-creatordate` | — |
-| GitHub 版本顺序 / 上一个 Tag | Tags API 无日期，按版本号排序：拆为 `前缀 + 数字段 + 预发布后缀`，同前缀内取下一个更小的版本（适配 `tokio-1.x` 与 `tokio-macros-2.x` 共存的 monorepo） | 出现非版本号命名的 Tag 排序错乱的真实案例 |
+| GitHub Tag 列表 | `git ls-remote --tags <url>`：一次拿到全部 Tag，不占 API 配额（Tags API 每页 100 且需翻页） | 私有仓库 ls-remote 无凭据失败的真实案例 → 回退 Tags API |
+| GitHub 版本顺序 / 上一个 Tag | ls-remote 无日期，按版本号排序：拆为 `前缀 + 数字段 + 后缀`，同前缀内取下一个更小的版本；多前缀（monorepo）时 Tag 数最多的前缀组排在前 | 出现排序错乱的真实案例；monorepo 可用 `--tag` / `--range` 精确指定 |
 | GitHub 区间提交 | `compare/{prev}...{tag}`，单次最多 250 条；超出时标注「显示 N / 共 M」 | 经常需要全量 → 增加 `--clone` 模式 |
 | GitHub 首个版本 | 不拉提交明细（省请求），只展示 Release 说明 | — |
-| 限流 | 匿名 60 次/小时；默认 limit 5 约 7 次请求；限流时给出明确提示 | — |
+| 限流 | 匿名 60 次/小时；默认 limit 5 约 6 次请求（1 次 Releases + 5 次 Compare）；限流时给出明确提示 | — |
 | 分类 | ① Conventional Commits；② 首词/关键词启发式（中英文）；③ 其他 | 真实仓库「其他」占比持续 > 50% → 评估可选 LLM 摘要 |
 
 ## 4. 分类规则

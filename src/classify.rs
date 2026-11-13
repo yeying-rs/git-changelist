@@ -6,30 +6,91 @@ const FIRST_WORDS: &[(Category, &[&str])] = &[
   (
     Category::Feature,
     &[
-      "add", "adds", "added", "adding", "support", "supports", "implement", "implements",
-      "implemented", "introduce", "introduces", "introduced", "new", "allow", "allows", "enable",
-      "enables", "expose", "exposes", "provide", "provides", "feat", "feature",
+      "add",
+      "adds",
+      "added",
+      "adding",
+      "support",
+      "supports",
+      "implement",
+      "implements",
+      "implemented",
+      "introduce",
+      "introduces",
+      "introduced",
+      "new",
+      "allow",
+      "allows",
+      "enable",
+      "enables",
+      "expose",
+      "exposes",
+      "provide",
+      "provides",
+      "feat",
+      "feature",
+      "improve",
+      "improves",
+      "improved",
+      "enhance",
+      "enhances",
     ],
   ),
   (
     Category::Fix,
     &[
-      "fix", "fixes", "fixed", "fixing", "resolve", "resolves", "resolved", "correct", "corrects",
-      "corrected", "prevent", "prevents", "avoid", "bugfix", "hotfix", "repair", "workaround",
+      "fix",
+      "fixes",
+      "fixed",
+      "fixing",
+      "resolve",
+      "resolves",
+      "resolved",
+      "correct",
+      "corrects",
+      "corrected",
+      "prevent",
+      "prevents",
+      "avoid",
+      "bugfix",
+      "hotfix",
+      "repair",
+      "workaround",
     ],
   ),
   (
     Category::Perf,
-    &["perf", "optimize", "optimise", "optimized", "optimised", "speed", "speedup", "accelerate"],
+    &[
+      "perf",
+      "optimize",
+      "optimise",
+      "optimized",
+      "optimised",
+      "speed",
+      "speedup",
+      "accelerate",
+    ],
   ),
   (
     Category::Refactor,
     &[
-      "refactor", "refactored", "refactoring", "cleanup", "clean", "simplify", "simplified",
-      "rename", "renamed", "restructure", "reorganize",
+      "refactor",
+      "refactored",
+      "refactoring",
+      "cleanup",
+      "clean",
+      "simplify",
+      "simplified",
+      "rename",
+      "renamed",
+      "restructure",
+      "reorganize",
     ],
   ),
-  (Category::Docs, &["doc", "docs", "document", "documented", "readme", "typo"]),
+  (
+    Category::Docs,
+    &["doc", "docs", "document", "documented", "readme", "typo"],
+  ),
   (
     Category::Chore,
     &[
@@ -40,7 +101,10 @@ const FIRST_WORDS: &[(Category, &[&str])] = &[
 ];
 
 const CJK_PREFIXES: &[(Category, &[&str])] = &[
-  (Category::Feature, &["新增", "增加", "添加", "支持", "实现", "引入", "新功能"]),
+  (
+    Category::Feature,
+    &["新增", "增加", "添加", "支持", "实现", "引入", "新功能"],
+  ),
   (Category::Fix, &["修复", "修正", "解决"]),
   (Category::Perf, &["优化", "性能"]),
   (Category::Refactor, &["重构", "清理", "简化", "重命名"]),
@@ -50,14 +114,26 @@ const CJK_PREFIXES: &[(Category, &[&str])] = &[
 
 /// Weaker signals, only used when neither the prefix nor the first word decides.
 const CONTAINS: &[(Category, &[&str])] = &[
-  (Category::Fix, &["bug", "crash", "panic", "regression", "修复", "崩溃", "错误"]),
+  (
+    Category::Fix,
+    &[
+      "bug",
+      "crash",
+      "panic",
+      "regression",
+      "修复",
+      "崩溃",
+      "错误",
+    ],
+  ),
   (Category::Perf, &["performance", "faster", "性能"]),
   (Category::Docs, &["readme", "documentation", "文档"]),
 ];
 
 pub fn classify(raw: RawCommit) -> Commit {
   let (subject, pr) = strip_pr(raw.subject.trim());
-  let body_breaking = raw.body.contains("BREAKING CHANGE:") || raw.body.contains("BREAKING-CHANGE:");
+  let body_breaking =
+    raw.body.contains("BREAKING CHANGE:") || raw.body.contains("BREAKING-CHANGE:");
 
   let (category, scope, summary, bang) = match parse_prefix(subject) {
     Some(p) => match conventional_type(p.kind) {
@@ -107,7 +183,12 @@ fn parse_prefix(subject: &str) -> Option<Prefix<'_>> {
   if kind.is_empty() || kind.chars().any(char::is_whitespace) {
     return None;
   }
-  Some(Prefix { kind, scope: scope.filter(|s| !s.is_empty()), bang, rest })
+  Some(Prefix {
+    kind,
+    scope: scope.filter(|s| !s.is_empty()),
+    bang,
+    rest,
+  })
 }
 
 fn conventional_type(kind: &str) -> Option<Category> {
@@ -127,16 +208,41 @@ fn conventional_type(kind: &str) -> Option<Category> {
 
 fn heuristic(text: &str) -> Category {
   let lower = text.trim().to_lowercase();
-  let first = lower.split(|c: char| !c.is_ascii_alphanumeric()).next().unwrap_or("");
+  let first = lower
+    .split(|c: char| !c.is_ascii_alphanumeric())
+    .next()
+    .unwrap_or("");
   let by_first_word = FIRST_WORDS.iter().find(|(_, words)| words.contains(&first));
-  let by_cjk_prefix =
-    || CJK_PREFIXES.iter().find(|(_, words)| words.iter().any(|w| lower.starts_with(w)));
-  let by_contains =
-    || CONTAINS.iter().find(|(_, words)| words.iter().any(|w| lower.contains(w)));
+  let by_cjk_prefix = || {
+    CJK_PREFIXES
+      .iter()
+      .find(|(_, words)| words.iter().any(|w| lower.starts_with(w)))
+  };
+  let by_contains = || {
+    CONTAINS
+      .iter()
+      .find(|(_, words)| words.iter().any(|w| lower.contains(w)))
+  };
   by_first_word
     .or_else(by_cjk_prefix)
     .or_else(by_contains)
-    .map_or(Category::Other, |(category, _)| *category)
+    .map(|(category, _)| *category)
+    .unwrap_or_else(|| {
+      if is_version_bump(&lower) {
+        Category::Chore
+      } else {
+        Category::Other
+      }
+    })
+}
+
+/// Release commits titled just `15.2.0` or `grep-pcre2-0.1.10`.
+fn is_version_bump(text: &str) -> bool {
+  !text.is_empty()
+    && !text.contains(char::is_whitespace)
+    && text.rsplit(['-', 'v']).next().is_some_and(|tail| {
+      tail.contains('.') && tail.chars().all(|c| c.is_ascii_digit() || c == '.')
+    })
 }
 
 /// Extracts a PR number from `... (#123)` or `Merge pull request #123 from ...`.
@@ -195,7 +301,13 @@ mod tests {
 
   #[test]
   fn breaking_change_footer_marks_breaking() {
-    assert!(commit("fix: rename flag", "body\n\nBREAKING CHANGE: --foo is now --bar").breaking);
+    assert!(
+      commit(
+        "fix: rename flag",
+        "body\n\nBREAKING CHANGE: --foo is now --bar"
+      )
+      .breaking
+    );
     assert!(!commit("fix: rename flag", "no break here").breaking);
   }
 
@@ -219,6 +331,11 @@ mod tests {
       ("修复登录失败的问题", Category::Fix),
       ("调整一下按钮颜色", Category::Other),
       ("Tweak colors", Category::Other),
+      ("15.2.0", Category::Chore),
+      ("grep-pcre2-0.1.10", Category::Chore),
+      ("v1.2.3", Category::Chore),
+      ("utf-8", Category::Other),
+      ("x86_64", Category::Other),
     ];
     for (subject, expected) in cases {
       assert_eq!(commit(subject, "").category, expected, "{subject}");

@@ -1,4 +1,5 @@
 mod classify;
+mod github;
 mod local;
 mod model;
 mod render;
@@ -9,6 +10,7 @@ use std::path::PathBuf;
 use anyhow::{Result, bail};
 use clap::Parser;
 
+use crate::github::GitHub;
 use crate::model::Selection;
 use crate::render::Lang;
 
@@ -44,6 +46,14 @@ struct Cli {
   #[arg(long)]
   merges: bool,
 
+  /// 本地模式下，按 origin 拉取 GitHub Release Notes 合并展示
+  #[arg(long)]
+  github: bool,
+
+  /// GitHub Token，提升限流额度并支持私有仓库
+  #[arg(long, env = "GITHUB_TOKEN", hide_env_values = true)]
+  token: Option<String>,
+
   /// 输出语言
   #[arg(long, value_enum, default_value = "zh")]
   lang: Lang,
@@ -75,10 +85,23 @@ fn run(cli: Cli) -> Result<()> {
     merges: cli.merges,
   };
   let path = PathBuf::from(&cli.target);
-  if !path.is_dir() {
-    bail!("{} 不是目录", cli.target);
-  }
-  let report = local::collect(&path, &selection)?;
+  let report = if path.is_dir() {
+    let mut report = local::collect(&path, &selection)?;
+    if cli.github {
+      let Some(slug) = report.github.clone() else {
+        bail!("--github 需要 origin 指向 GitHub 仓库");
+      };
+      let mut releases = GitHub::new(cli.token)?.releases(&slug)?;
+      for version in &mut report.versions {
+        version.release = version.tag.as_ref().and_then(|tag| releases.remove(tag));
+      }
+    }
+    report
+  } else if let Some(slug) = github::parse_slug(&cli.target) {
+    github::collect(&slug, &selection, &GitHub::new(cli.token)?)?
+  } else {
+    bail!("{} 既不是本地目录，也不是可识别的 GitHub 地址", cli.target);
+  };
   let color = std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
   print!("{}", render::text(&report, cli.lang, color));
   Ok(())
