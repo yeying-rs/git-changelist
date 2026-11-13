@@ -1,6 +1,6 @@
 //! Commit classification: Conventional Commits first, keyword heuristics second.
 
-use crate::model::{Category, Commit, RawCommit};
+use crate::model::{Category, ClassifiedBy, Commit, RawCommit, Trailer};
 
 const FIRST_WORDS: &[(Category, &[&str])] = &[
   (
@@ -132,27 +132,187 @@ const CONTAINS: &[(Category, &[&str])] = &[
 
 pub fn classify(raw: RawCommit) -> Commit {
   let (subject, pr) = strip_pr(raw.subject.trim());
-  let body_breaking =
-    raw.body.contains("BREAKING CHANGE:") || raw.body.contains("BREAKING-CHANGE:");
+  let (trailers, reverts) = extract_trailers(subject, &raw.body);
+  let body_breaking = trailers.iter().any(|t| t.key == "BREAKING CHANGE");
 
-  let (category, scope, summary, bang) = match parse_prefix(subject) {
+  let (category, classified_by, scope, summary, bang) = match parse_prefix(subject) {
     Some(p) => match conventional_type(p.kind) {
-      Some(category) => (category, p.scope, p.rest, p.bang),
+      Some(category) => (
+        category,
+        ClassifiedBy::Conventional,
+        p.scope,
+        p.rest,
+        p.bang,
+      ),
       // `net/http: fix ...` style: the prefix is a component, not a type.
-      None => (heuristic(p.rest), Some(p.kind), p.rest, p.bang),
+      None => {
+        let (category, classified_by) = heuristic(p.rest);
+        (category, classified_by, Some(p.kind), p.rest, p.bang)
+      }
     },
-    None => (heuristic(subject), None, subject, false),
+    None => {
+      let (category, classified_by) = heuristic(subject);
+      (category, classified_by, None, subject, false)
+    }
   };
+
+  let body = (!raw.body.trim().is_empty()).then(|| raw.body.trim_end().to_string());
 
   Commit {
     sha: raw.sha,
     author: raw.author,
     date: raw.date,
     category,
+    classified_by,
     breaking: bang || body_breaking,
     scope: scope.map(str::to_string),
     summary: summary.to_string(),
+    body,
+    trailers,
     pr,
+    reverts,
+    reverted_by: None,
+  }
+}
+
+/// Pairs revert commits with the original commit they revert when both appear in `commits`.
+pub fn link_reverts(commits: &mut [Commit]) {
+  for i in 0..commits.len() {
+    let revert_sha_hint = commits[i].reverts.clone();
+    let revert_subject_hint = commits[i]
+      .summary
+      .strip_prefix("Revert \"")
+      .and_then(|s| s.strip_suffix('"'))
+      .map(str::to_string);
+    if revert_sha_hint.is_none() && revert_subject_hint.is_none() {
+      continue;
+    }
+    let matched = (0..commits.len()).find(|&j| {
+      if i == j {
+        return false;
+      }
+      if let Some(hint) = &revert_sha_hint
+        && (commits[j].sha.starts_with(hint) || hint.starts_with(&commits[j].sha))
+      {
+        return true;
+      }
+      if let Some(target) = &revert_subject_hint {
+        let stripped = parse_prefix(target).map_or(target.as_str(), |p| p.rest);
+        return commits[j].summary == target.as_str() || commits[j].summary == stripped;
+      }
+      false
+    });
+    if let Some(j) = matched {
+      let target_sha = commits[j].sha.clone();
+      let revert_sha = commits[i].sha.clone();
+      commits[i].reverts = Some(target_sha);
+      commits[j].reverted_by = Some(revert_sha);
+    }
+  }
+}
+
+fn extract_trailers(subject: &str, body: &str) -> (Vec<Trailer>, Option<String>) {
+  let mut trailers = Vec::new();
+  let mut reverts = None;
+  extract_issue_refs(subject, &mut trailers);
+
+  for raw_line in body.lines() {
+    let line = raw_line.trim();
+    if line.is_empty() {
+      continue;
+    }
+    if let Some(rest) = line
+      .strip_prefix("BREAKING CHANGE:")
+      .or_else(|| line.strip_prefix("BREAKING-CHANGE:"))
+    {
+      trailers.push(Trailer {
+        key: "BREAKING CHANGE".into(),
+        value: rest.trim().into(),
+      });
+      continue;
+    }
+    if let Some(sha) = line
+      .strip_prefix("(cherry picked from commit ")
+      .and_then(|s| s.strip_suffix(')'))
+    {
+      trailers.push(Trailer {
+        key: "cherry-picked-from".into(),
+        value: sha.trim().into(),
+      });
+      continue;
+    }
+    if let Some(sha) = line.strip_prefix("This reverts commit ") {
+      let sha = sha.trim_end_matches('.').trim();
+      if !sha.is_empty() && sha.chars().all(|c| c.is_ascii_hexdigit()) {
+        reverts = Some(sha.to_string());
+      }
+      continue;
+    }
+    if let Some((key, value)) = line.split_once(':')
+      && let Some(canonical) = canonical_trailer_key(key.trim())
+    {
+      let value = value.trim();
+      if !value.is_empty() {
+        trailers.push(Trailer {
+          key: canonical.into(),
+          value: value.into(),
+        });
+        continue;
+      }
+    }
+    extract_issue_refs(line, &mut trailers);
+  }
+  (trailers, reverts)
+}
+
+fn canonical_trailer_key(key: &str) -> Option<&'static str> {
+  match key.to_ascii_lowercase().as_str() {
+    "co-authored-by" => Some("Co-authored-by"),
+    "signed-off-by" => Some("Signed-off-by"),
+    "reviewed-by" => Some("Reviewed-by"),
+    "acked-by" => Some("Acked-by"),
+    "reported-by" => Some("Reported-by"),
+    "fixes" | "fixed" => Some("Fixes"),
+    "closes" | "closed" => Some("Closes"),
+    "resolves" | "resolved" => Some("Resolves"),
+    "refs" | "ref" => Some("Refs"),
+    "see-also" => Some("See-also"),
+    _ => None,
+  }
+}
+
+fn extract_issue_refs(text: &str, trailers: &mut Vec<Trailer>) {
+  let tokens: Vec<&str> = text.split_whitespace().collect();
+  for window in tokens.windows(2) {
+    let [word, target] = window else { continue };
+    let is_close_word = matches!(
+      word.trim_end_matches(':').to_ascii_lowercase().as_str(),
+      "fix"
+        | "fixes"
+        | "fixed"
+        | "close"
+        | "closes"
+        | "closed"
+        | "resolve"
+        | "resolves"
+        | "resolved"
+    );
+    if !is_close_word {
+      continue;
+    }
+    let cleaned = target.trim_end_matches([',', '.', ';', ')']);
+    if let Some(digits) = cleaned.strip_prefix('#')
+      && !digits.is_empty()
+      && digits.chars().all(|c| c.is_ascii_digit())
+    {
+      let value = format!("#{digits}");
+      if !trailers.iter().any(|t| t.value == value) {
+        trailers.push(Trailer {
+          key: "Fixes".into(),
+          value,
+        });
+      }
+    }
   }
 }
 
@@ -206,7 +366,7 @@ fn conventional_type(kind: &str) -> Option<Category> {
   Some(category)
 }
 
-fn heuristic(text: &str) -> Category {
+fn heuristic(text: &str) -> (Category, ClassifiedBy) {
   let lower = text.trim().to_lowercase();
   let first = lower
     .split(|c: char| !c.is_ascii_alphanumeric())
@@ -226,12 +386,12 @@ fn heuristic(text: &str) -> Category {
   by_first_word
     .or_else(by_cjk_prefix)
     .or_else(by_contains)
-    .map(|(category, _)| *category)
+    .map(|(category, _)| (*category, ClassifiedBy::Keyword))
     .unwrap_or_else(|| {
       if is_version_bump(&lower) {
-        Category::Chore
+        (Category::Chore, ClassifiedBy::Keyword)
       } else {
-        Category::Other
+        (Category::Other, ClassifiedBy::None)
       }
     })
 }
@@ -355,5 +515,79 @@ mod tests {
     assert_eq!(c.summary, "add thing");
     assert_eq!(commit("Merge pull request #45 from a/b", "").pr, Some(45));
     assert_eq!(commit("fix: not a pr (#abc)", "").pr, None);
+  }
+
+  #[test]
+  fn classified_by_distinguishes_conventional_keyword_and_none() {
+    assert_eq!(
+      commit("feat(cli): add flag", "").classified_by,
+      ClassifiedBy::Conventional
+    );
+    assert_eq!(
+      commit("Add support for TOML", "").classified_by,
+      ClassifiedBy::Keyword
+    );
+    assert_eq!(
+      commit("net/http: fix race", "").classified_by,
+      ClassifiedBy::Keyword
+    );
+    assert_eq!(commit("Tweak colors", "").classified_by, ClassifiedBy::None);
+  }
+
+  #[test]
+  fn body_and_trailers_are_preserved() {
+    let body = "Explain why.\n\n\
+                Fixes #42\n\
+                Co-authored-by: Alice <a@example.com>\n\
+                BREAKING CHANGE: config format changed\n\
+                (cherry picked from commit deadbeef01234567)";
+    let c = commit("feat: new config", body);
+    assert_eq!(c.body.as_deref(), Some(body));
+    assert!(c.breaking);
+    assert_eq!(
+      c.trailers,
+      vec![
+        Trailer {
+          key: "Fixes".into(),
+          value: "#42".into(),
+        },
+        Trailer {
+          key: "Co-authored-by".into(),
+          value: "Alice <a@example.com>".into(),
+        },
+        Trailer {
+          key: "BREAKING CHANGE".into(),
+          value: "config format changed".into(),
+        },
+        Trailer {
+          key: "cherry-picked-from".into(),
+          value: "deadbeef01234567".into(),
+        },
+      ]
+    );
+    assert_eq!(commit("feat: empty body", "   \n ").body, None);
+  }
+
+  #[test]
+  fn reverts_are_extracted_and_linked_within_version() {
+    let mut commits = vec![
+      classify(RawCommit {
+        sha: "222222222222".into(),
+        author: "a".into(),
+        date: "2026-01-02".into(),
+        subject: "Revert \"feat: risky change\"".into(),
+        body: "This reverts commit 111111111111.".into(),
+      }),
+      classify(RawCommit {
+        sha: "111111111111".into(),
+        author: "a".into(),
+        date: "2026-01-01".into(),
+        subject: "feat: risky change".into(),
+        body: String::new(),
+      }),
+    ];
+    link_reverts(&mut commits);
+    assert_eq!(commits[0].reverts.as_deref(), Some("111111111111"));
+    assert_eq!(commits[1].reverted_by.as_deref(), Some("222222222222"));
   }
 }

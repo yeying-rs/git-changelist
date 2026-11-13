@@ -11,8 +11,8 @@ use reqwest::blocking::Client;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
-use crate::classify::classify;
-use crate::model::{RawCommit, Release, Report, Selection, Version};
+use crate::classify::{classify, link_reverts};
+use crate::model::{RawCommit, Release, Report, SCHEMA_VERSION, Selection, Version};
 
 const API: &str = "https://api.github.com";
 
@@ -251,9 +251,16 @@ pub fn collect(slug: &str, selection: &Selection, github: &GitHub) -> Result<Rep
 
   let mut releases = github.releases(slug)?;
   let mut versions = Vec::with_capacity(ranges.len());
+  let mut warnings = Vec::new();
+  if selection.range.is_some() && ranges.len() > 1 {
+    warnings.push(
+      "GitHub 远端模式按版本号切分区间，未做本地 cherry-pick 补丁去重；如需 hotfix 分支精确去重请克隆到本地运行"
+        .to_string(),
+    );
+  }
   for (tag, previous, head) in ranges {
     // The first version has no base to compare against; skip its history to save requests.
-    let (commits, total_commits) = match &previous {
+    let (raw_commits, total_commits) = match &previous {
       Some(base) => github.compare(slug, base, &head, selection)?,
       None => (Vec::new(), 0),
     };
@@ -264,21 +271,34 @@ pub fn collect(slug: &str, selection: &Selection, github: &GitHub) -> Result<Rep
     let date = release
       .as_ref()
       .and_then(|r| r.published_at.clone())
-      .or_else(|| commits.first().map(|c| c.date.clone()));
+      .or_else(|| raw_commits.first().map(|c| c.date.clone()));
+    let mut commits: Vec<_> = raw_commits.into_iter().map(classify).collect();
+    link_reverts(&mut commits);
+    let truncated = total_commits > commits.len();
+    if truncated {
+      warnings.push(format!(
+        "版本 {head} 共 {total_commits} 个提交，仅获取到 {} 个（受 --max-commits={} 或 GitHub Compare 250 条上限限制）",
+        commits.len(),
+        selection.max_commits
+      ));
+    }
     versions.push(Version {
       tag,
       previous,
       date,
       tag_message: None,
       release,
-      commits: commits.into_iter().map(classify).collect(),
+      commits,
       total_commits,
+      truncated,
     });
   }
 
   Ok(Report {
+    schema_version: SCHEMA_VERSION,
     source: format!("https://github.com/{slug}"),
     github: Some(slug.to_string()),
+    warnings,
     versions,
   })
 }

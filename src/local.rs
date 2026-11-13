@@ -7,9 +7,9 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
-use crate::classify::classify;
+use crate::classify::{classify, link_reverts};
 use crate::github::{compare_versions, parse_slug, tag_prefix};
-use crate::model::{RawCommit, Report, Selection, Version};
+use crate::model::{RawCommit, Report, SCHEMA_VERSION, Selection, Version};
 
 const FIELD: char = '\x1f';
 const RECORD: char = '\x1e';
@@ -48,6 +48,7 @@ pub fn collect(repo: &Path, selection: &Selection) -> Result<Report> {
   }
 
   let mut versions = Vec::with_capacity(ranges.len());
+  let mut warnings = Vec::new();
   for (tag, previous) in ranges {
     let head = tag.as_deref().unwrap_or("HEAD");
     let revisions = revisions(previous.as_deref(), head);
@@ -59,14 +60,25 @@ pub fn collect(repo: &Path, selection: &Selection) -> Result<Report> {
     let info = tag
       .as_ref()
       .and_then(|name| tags.iter().find(|t| &t.name == name));
+    let mut commits: Vec<_> = log(repo, &revisions, selection)?
+      .into_iter()
+      .map(classify)
+      .collect();
+    link_reverts(&mut commits);
+    let truncated = total_commits > commits.len();
+    if truncated {
+      warnings.push(format!(
+        "版本 {head} 共 {total_commits} 个提交，已按 --max-commits={} 截断为 {} 个",
+        selection.max_commits,
+        commits.len()
+      ));
+    }
     versions.push(Version {
       date: info.map(|t| t.date.clone()),
       tag_message: info.and_then(|t| t.message.clone()),
-      commits: log(repo, &revisions, selection)?
-        .into_iter()
-        .map(classify)
-        .collect(),
+      commits,
       total_commits,
+      truncated,
       release: None,
       tag,
       previous,
@@ -74,6 +86,7 @@ pub fn collect(repo: &Path, selection: &Selection) -> Result<Report> {
   }
 
   Ok(Report {
+    schema_version: SCHEMA_VERSION,
     // `.` makes a useless heading in exported files.
     source: repo
       .canonicalize()
@@ -81,6 +94,7 @@ pub fn collect(repo: &Path, selection: &Selection) -> Result<Report> {
       .display()
       .to_string(),
     github: origin_url(repo).as_deref().and_then(parse_slug),
+    warnings,
     versions,
   })
 }
@@ -519,6 +533,8 @@ mod tests {
     .unwrap();
     assert_eq!(report.versions[0].commits.len(), 1);
     assert_eq!(report.versions[0].total_commits, 2);
+    assert!(report.versions[0].truncated);
+    assert!(!report.warnings.is_empty());
   }
 
   #[test]

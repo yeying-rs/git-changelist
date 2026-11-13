@@ -9,7 +9,7 @@
 | 5 | Markdown / JSON 输出、`--lang en`、`-o` 写文件 | DONE（Markdown 含 compare/PR/commit 链接） |
 | 6 | README、release 构建与 `cargo install` 安装验证 | DONE（release 7.4M，已安装到 ~/.cargo/bin） |
 | 7 | 更新设计文档 `docs/design.md` 与 `TODOs.md`（v0.2 面向 AI 的版本事实契约与排查子命令） | DONE（已补充 JSON 事实契约、find/which/deps 与 Skill 规划） |
-| 8 | 完善 JSON 事实契约：`schema_version`、`body`、`trailers`、`classified_by`、`reverts`/`reverted_by`、`truncated`、`warnings[]` | TODO |
+| 8 | 完善 JSON 事实契约：`schema_version`、`body`、`trailers`、`classified_by`、`reverts`/`reverted_by`、`truncated`、`warnings[]` | DONE（32 个单元测试通过，含 trailer/revert/truncation 校验） |
 | 9 | 提交改动文件统计 `--files`（`--numstat`）及过滤参数 `--path`、`--grep` | TODO |
 | 10 | 版本排查子命令 `taglens find <QUERY>` 与 `taglens which <REV>` | TODO |
 | 11 | 依赖锁文件变更对比子命令 `taglens deps <FROM> <TO>`（`Cargo.lock`、`uv.lock`、`package-lock.json`、`go.sum`） | TODO |

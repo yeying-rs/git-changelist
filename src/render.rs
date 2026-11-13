@@ -317,7 +317,7 @@ pub fn markdown(report: &Report, lang: Lang) -> String {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::model::Commit;
+  use crate::model::{ClassifiedBy, Commit, SCHEMA_VERSION};
 
   fn commit(category: Category, breaking: bool, summary: &str) -> Commit {
     Commit {
@@ -325,17 +325,24 @@ mod tests {
       author: "a".into(),
       date: "2026-01-01".into(),
       category,
+      classified_by: ClassifiedBy::Conventional,
       breaking,
       scope: None,
       summary: summary.into(),
+      body: None,
+      trailers: Vec::new(),
       pr: None,
+      reverts: None,
+      reverted_by: None,
     }
   }
 
   fn report() -> Report {
     Report {
+      schema_version: SCHEMA_VERSION,
       source: "demo".into(),
       github: None,
+      warnings: Vec::new(),
       versions: vec![Version {
         tag: Some("v1.0.0".into()),
         previous: Some("v0.9.0".into()),
@@ -348,6 +355,7 @@ mod tests {
           commit(Category::Feature, false, "add two"),
         ],
         total_commits: 5,
+        truncated: true,
       }],
     }
   }
