@@ -1,5 +1,6 @@
 //! Local repository collector, driven by the system `git` binary.
 
+use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::path::Path;
 use std::process::Command;
@@ -7,7 +8,7 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 
 use crate::classify::classify;
-use crate::github::{parse_slug, tag_prefix};
+use crate::github::{compare_versions, parse_slug, tag_prefix};
 use crate::model::{RawCommit, Report, Selection, Version};
 
 const FIELD: char = '\x1f';
@@ -49,11 +50,8 @@ pub fn collect(repo: &Path, selection: &Selection) -> Result<Report> {
   let mut versions = Vec::with_capacity(ranges.len());
   for (tag, previous) in ranges {
     let head = tag.as_deref().unwrap_or("HEAD");
-    let range = match &previous {
-      Some(previous) => format!("{previous}..{head}"),
-      None => head.to_string(),
-    };
-    let total_commits = count_commits(repo, &range, selection.merges)?;
+    let revisions = revisions(previous.as_deref(), head);
+    let total_commits = count_commits(repo, &revisions, selection.merges)?;
     // Only an unreleased range can be legitimately empty; hide it instead of showing noise.
     if tag.is_none() && total_commits == 0 && !tags.is_empty() {
       continue;
@@ -64,7 +62,7 @@ pub fn collect(repo: &Path, selection: &Selection) -> Result<Report> {
     versions.push(Version {
       date: info.map(|t| t.date.clone()),
       tag_message: info.and_then(|t| t.message.clone()),
-      commits: log(repo, &range, selection)?
+      commits: log(repo, &revisions, selection)?
         .into_iter()
         .map(classify)
         .collect(),
@@ -134,8 +132,9 @@ fn previous_tag(repo: &Path, rev: &str, prefix: Option<&str>) -> Option<String> 
   git(repo, &args).ok().map(|s| s.trim().to_string())
 }
 
-/// Splits `from..to` at every tag in between that shares the endpoints' prefix, newest first,
-/// so each change is attributed to the version that introduced it.
+/// Splits `from..to` at every tag of the endpoints' prefix whose version lies between them,
+/// newest first, so each change is attributed to the version that introduced it.
+/// Version order (not ancestry) decides, so tags on release/hotfix branches count too.
 /// Without a tag endpoint there is no prefix to go by, and the range stays one block.
 fn split_range(
   repo: &Path,
@@ -143,42 +142,76 @@ fn split_range(
   from: &str,
   to: &str,
 ) -> Result<Vec<(Option<String>, Option<String>)>> {
-  let is_tag = |name: &str| tags.iter().any(|t| t.name == name);
-  let prefix = match (is_tag(to), is_tag(from)) {
+  let to_is_tag = tags.iter().any(|t| t.name == to);
+  let from_is_tag = tags.iter().any(|t| t.name == from);
+  let prefix = match (to_is_tag, from_is_tag) {
     (true, _) => tag_prefix(to),
     (false, true) => tag_prefix(from),
     (false, false) => return Ok(vec![(Some(to.to_string()), Some(from.to_string()))]),
   };
-  let merged = format!("--merged={to}");
-  let not_merged = format!("--no-merged={from}");
-  let inside = git(repo, &["tag", "--list", &merged, &not_merged])?;
-  let inside: HashSet<&str> = inside.lines().collect();
+  // A non-tag endpoint has no version, so fall back to ancestry on that side.
+  let reachable = |flag: &str, rev: &str| -> Result<HashSet<String>> {
+    let out = git(repo, &["tag", "--list", &format!("{flag}={rev}")])?;
+    Ok(out.lines().map(str::to_string).collect())
+  };
+  let below_to = if to_is_tag {
+    None
+  } else {
+    Some(reachable("--merged", to)?)
+  };
+  let above_from = if from_is_tag {
+    None
+  } else {
+    Some(reachable("--no-merged", from)?)
+  };
 
-  // `tags` is newest first, so the heads come out newest first too.
-  let between = tags
+  let mut between: Vec<&str> = tags
     .iter()
     .map(|t| t.name.as_str())
-    .filter(|name| *name != to && inside.contains(name) && tag_prefix(name) == prefix);
+    .filter(|name| *name != to && *name != from && tag_prefix(name) == prefix)
+    .filter(|name| match &below_to {
+      Some(set) => set.contains(*name),
+      None => compare_versions(name, to) == Ordering::Less,
+    })
+    .filter(|name| match &above_from {
+      Some(set) => set.contains(*name),
+      None => compare_versions(name, from) == Ordering::Greater,
+    })
+    .collect();
+  between.sort_by(|a, b| compare_versions(b, a));
+
+  let heads: Vec<&str> = std::iter::once(to).chain(between).collect();
+  let previous = heads.iter().skip(1).copied().chain(std::iter::once(from));
   Ok(
-    std::iter::once(to)
-      .chain(between)
-      .map(|head| {
-        // A previous tag outside the range (e.g. on another branch) is clamped to `from`.
-        let previous = previous_tag(repo, &format!("{head}^"), Some(prefix))
-          .filter(|p| p != head && inside.contains(p.as_str()))
-          .unwrap_or_else(|| from.to_string());
-        (Some(head.to_string()), Some(previous))
-      })
+    heads
+      .iter()
+      .zip(previous)
+      .map(|(head, previous)| (Some(head.to_string()), Some(previous.to_string())))
       .collect(),
   )
 }
 
-fn count_commits(repo: &Path, range: &str, merges: bool) -> Result<usize> {
+/// Revision arguments for the commits `head` brings over `previous`.
+/// `A...B --cherry-pick --right-only` drops commits whose patch already shipped in `previous`
+/// (back-ports on a release branch); on linear history it is the same as `A..B`.
+fn revisions(previous: Option<&str>, head: &str) -> Vec<String> {
+  match previous {
+    Some(previous) => vec![
+      "--cherry-pick".to_string(),
+      "--right-only".to_string(),
+      "--end-of-options".to_string(),
+      format!("{previous}...{head}"),
+    ],
+    None => vec!["--end-of-options".to_string(), head.to_string()],
+  }
+}
+
+fn count_commits(repo: &Path, revisions: &[String], merges: bool) -> Result<usize> {
   let mut args = vec!["rev-list", "--count"];
   if !merges {
     args.push("--no-merges");
   }
-  args.extend(["--end-of-options", range]);
+  args.extend(revisions.iter().map(String::as_str));
   let out = git(repo, &args)?;
   out
     .trim()
@@ -186,13 +219,13 @@ fn count_commits(repo: &Path, range: &str, merges: bool) -> Result<usize> {
     .with_context(|| format!("无法解析提交数：{out}"))
 }
 
-fn log(repo: &Path, range: &str, selection: &Selection) -> Result<Vec<RawCommit>> {
+fn log(repo: &Path, revisions: &[String], selection: &Selection) -> Result<Vec<RawCommit>> {
   let max = format!("--max-count={}", selection.max_commits);
   let mut args = vec!["log", "--format=%H%x1f%an%x1f%as%x1f%s%x1f%b%x1e", &max];
   if !selection.merges {
     args.push("--no-merges");
   }
-  args.extend(["--end-of-options", range]);
+  args.extend(revisions.iter().map(String::as_str));
   let out = git(repo, &args)?;
   Ok(
     records(&out)
@@ -264,6 +297,13 @@ mod tests {
 
     fn commit(&self, message: &str) {
       self.run(&["commit", "-q", "--allow-empty", "-m", message]);
+    }
+
+    /// A commit with a real diff, so `--cherry-pick` can match it by patch id.
+    fn commit_file(&self, file: &str, message: &str) {
+      std::fs::write(self.0.join(file), message).unwrap();
+      self.run(&["add", file]);
+      self.run(&["commit", "-q", "-m", message]);
     }
   }
 
@@ -426,6 +466,34 @@ mod tests {
       ("v0.3.0".to_string(), "v0.2.1".to_string(), 1),
     ];
     assert_eq!(segments(&range(&repo, "v0.2.1", "HEAD")), expected);
+  }
+
+  /// main:   v0.1.0 ─ shared ─ crash ─ new(v0.2.0)
+  /// hotfix:                 └ crash' (cherry-pick, v0.1.1)
+  #[test]
+  fn range_includes_hotfix_branch_tags_without_duplicating_backports() {
+    let repo = TempRepo::new("range-hotfix");
+    repo.commit_file("a", "feat: base");
+    repo.run(&["tag", "v0.1.0"]);
+    repo.commit_file("b", "feat: shared");
+    repo.run(&["branch", "hotfix"]);
+    repo.commit_file("c", "fix: crash");
+    repo.run(&["checkout", "-q", "hotfix"]);
+    // -x changes the message; otherwise the same-second pick can reproduce the original SHA.
+    repo.run(&["cherry-pick", "-x", "main"]);
+    repo.run(&["tag", "v0.1.1"]);
+    repo.run(&["checkout", "-q", "main"]);
+    repo.commit_file("d", "feat: new");
+    repo.run(&["tag", "v0.2.0"]);
+
+    let report = range(&repo, "v0.1.0", "v0.2.0");
+    let expected = [
+      ("v0.2.0".to_string(), "v0.1.1".to_string(), 1),
+      ("v0.1.1".to_string(), "v0.1.0".to_string(), 2),
+    ];
+    assert_eq!(segments(&report), expected);
+    // The back-ported fix shipped in v0.1.1, so upgrading to v0.2.0 only brings `new`.
+    assert_eq!(report.versions[0].commits[0].summary, "new");
   }
 
   #[test]

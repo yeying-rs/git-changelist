@@ -377,7 +377,7 @@ fn version_key(tag: &str) -> (&str, Vec<u64>, &str) {
   (&tag[..start], numbers, rest[end..].trim_start_matches('.'))
 }
 
-fn compare_versions(a: &str, b: &str) -> Ordering {
+pub fn compare_versions(a: &str, b: &str) -> Ordering {
   let (prefix_a, numbers_a, suffix_a) = version_key(a);
   let (prefix_b, numbers_b, suffix_b) = version_key(b);
   prefix_a

@@ -50,7 +50,7 @@ flowchart LR
 | GitHub 版本顺序 / 上一个 Tag | ls-remote 无日期，按版本号排序：拆为 `前缀 + 数字段 + 后缀`，同前缀内取下一个更小的版本；多前缀（monorepo）时 Tag 数最多的前缀组排在前 | 出现排序错乱的真实案例；monorepo 可用 `--tag` / `--range` 精确指定 |
 | GitHub 区间提交 | `compare/{prev}...{tag}`，单次最多 250 条；超出时标注「显示 N / 共 M」 | 经常需要全量 → 增加 `--clone` 模式 |
 | GitHub 首个版本 | 不拉提交明细（省请求），只展示 Release 说明 | — |
-| `--range A B` 分段 | 至少一端是 Tag 时，在中间同前缀的 Tag 处切开。本地用 `git tag --merged=B --no-merged=A` 取历史上真正位于区间内的 Tag，前序 Tag 落在区间外时退回 A；GitHub 按版本号区间筛选 | GitHub 模式遇到 hotfix 分支导致分段错误的真实案例 |
+| `--range A B` 分段 | 至少一端是 Tag 时，按版本号取中间同前缀的 Tag 切开（含 hotfix 分支 Tag，符合「升级路径」的直觉）；非 Tag 端点退回按祖先关系筛选。每段用 `A...B --cherry-pick --right-only`，去掉已在上一版本回合过的提交；线性历史下等价于 `A..B` | 版本号排序与发布顺序不一致的真实案例 |
 | 限流 | 匿名 60 次/小时；默认 limit 5 约 6 次请求（1 次 Releases + 5 次 Compare）；限流时给出明确提示 | — |
 | 分类 | ① Conventional Commits；② 首词/关键词启发式（中英文）；③ 其他 | 真实仓库「其他」占比持续 > 50% → 评估可选 LLM 摘要 |
 
