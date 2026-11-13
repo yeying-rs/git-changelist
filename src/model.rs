@@ -186,3 +186,29 @@ pub struct WhichReport {
   pub first_tag: Option<String>,
   pub contained_in: Vec<TagSeries>,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DepChange {
+  pub name: String,
+  #[serde(skip_serializing_if = "Vec::is_empty")]
+  pub from: Vec<String>,
+  #[serde(skip_serializing_if = "Vec::is_empty")]
+  pub to: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LockfileDiff {
+  pub file: String,
+  pub added: Vec<DepChange>,
+  pub removed: Vec<DepChange>,
+  pub updated: Vec<DepChange>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DepsReport {
+  pub schema_version: u32,
+  pub source: String,
+  pub from: String,
+  pub to: String,
+  pub lockfiles: Vec<LockfileDiff>,
+}

@@ -4,7 +4,7 @@ use std::fmt::Write;
 
 use clap::ValueEnum;
 
-use crate::model::{Category, Commit, FindReport, Report, Version, WhichReport};
+use crate::model::{Category, Commit, DepsReport, FindReport, Report, Version, WhichReport};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum Lang {
@@ -388,6 +388,50 @@ pub fn which_text(report: &WhichReport, lang: Lang) -> String {
     "{}\n• {sha} ({}) {}\n  {exact_label}: {exact}\n  {base_label}: {base}\n  {first_label}: {first}\n",
     report.source, report.commit.date, report.commit.summary
   )
+}
+
+pub fn deps_text(report: &DepsReport, lang: Lang) -> String {
+  let mut out = format!("{} ({} → {})\n", report.source, report.from, report.to);
+  if report.lockfiles.is_empty() {
+    let msg = match lang {
+      Lang::Zh => "未检测到锁文件变更",
+      Lang::En => "No lockfile changes detected",
+    };
+    let _ = writeln!(out, "  {msg}");
+    return out;
+  }
+  let (updated_label, added_label, removed_label) = match lang {
+    Lang::Zh => ("升级/变更", "新增", "移除"),
+    Lang::En => ("Updated", "Added", "Removed"),
+  };
+  for lock in &report.lockfiles {
+    let _ = writeln!(out, "\n▌ {}", lock.file);
+    if !lock.updated.is_empty() {
+      let _ = writeln!(out, "  {updated_label} ({}):", lock.updated.len());
+      for dep in &lock.updated {
+        let _ = writeln!(
+          out,
+          "    • {}: {} → {}",
+          dep.name,
+          dep.from.join(", "),
+          dep.to.join(", ")
+        );
+      }
+    }
+    if !lock.added.is_empty() {
+      let _ = writeln!(out, "  {added_label} ({}):", lock.added.len());
+      for dep in &lock.added {
+        let _ = writeln!(out, "    + {} {}", dep.name, dep.to.join(", "));
+      }
+    }
+    if !lock.removed.is_empty() {
+      let _ = writeln!(out, "  {removed_label} ({}):", lock.removed.len());
+      for dep in &lock.removed {
+        let _ = writeln!(out, "    - {} {}", dep.name, dep.from.join(", "));
+      }
+    }
+  }
+  out
 }
 
 #[cfg(test)]

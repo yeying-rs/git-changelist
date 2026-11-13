@@ -1,7 +1,7 @@
 //! Local repository collector, driven by the system `git` binary.
 
 use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::Path;
 use std::process::Command;
 
@@ -10,8 +10,8 @@ use anyhow::{Context, Result, bail};
 use crate::classify::{classify, link_reverts, matches_grep};
 use crate::github::{compare_versions, parse_slug, tag_prefix};
 use crate::model::{
-  Backport, Commit, FileChange, FindReport, FoundCommit, RawCommit, Report, SCHEMA_VERSION,
-  Selection, TagSeries, Version, WhichReport,
+  Backport, Commit, DepChange, DepsReport, FileChange, FindReport, FoundCommit, LockfileDiff,
+  RawCommit, Report, SCHEMA_VERSION, Selection, TagSeries, Version, WhichReport,
 };
 
 const FIELD: char = '\x1f';
@@ -259,6 +259,164 @@ pub fn which(repo: &Path, rev: &str) -> Result<WhichReport> {
     first_tag,
     contained_in,
   })
+}
+
+pub fn deps(repo: &Path, from: &str, to: &str) -> Result<DepsReport> {
+  git(repo, &["rev-parse", "--git-dir"])
+    .with_context(|| format!("{} 不是 git 仓库", repo.display()))?;
+  let changed = git(repo, &["diff", "--name-only", from, to])
+    .with_context(|| format!("无法对比 {from} 与 {to}"))?;
+
+  let mut lockfiles = Vec::new();
+  for file in changed.lines().map(str::trim).filter(|s| !s.is_empty()) {
+    let Some(name) = Path::new(file).file_name().and_then(|n| n.to_str()) else {
+      continue;
+    };
+    if !matches!(
+      name,
+      "Cargo.lock" | "uv.lock" | "package-lock.json" | "go.sum"
+    ) {
+      continue;
+    }
+    let before = git(repo, &["show", &format!("{from}:{file}")]).unwrap_or_default();
+    let after = git(repo, &["show", &format!("{to}:{file}")]).unwrap_or_default();
+    let before_map = parse_lockfile(name, &before);
+    let after_map = parse_lockfile(name, &after);
+
+    let mut added = Vec::new();
+    let mut removed = Vec::new();
+    let mut updated = Vec::new();
+
+    for (pkg, after_vers) in &after_map {
+      match before_map.get(pkg) {
+        None => added.push(DepChange {
+          name: pkg.clone(),
+          from: Vec::new(),
+          to: after_vers.clone(),
+        }),
+        Some(before_vers) if before_vers != after_vers => updated.push(DepChange {
+          name: pkg.clone(),
+          from: before_vers.clone(),
+          to: after_vers.clone(),
+        }),
+        Some(_) => {}
+      }
+    }
+    for (pkg, before_vers) in &before_map {
+      if !after_map.contains_key(pkg) {
+        removed.push(DepChange {
+          name: pkg.clone(),
+          from: before_vers.clone(),
+          to: Vec::new(),
+        });
+      }
+    }
+    if !added.is_empty() || !removed.is_empty() || !updated.is_empty() {
+      lockfiles.push(LockfileDiff {
+        file: file.to_string(),
+        added,
+        removed,
+        updated,
+      });
+    }
+  }
+
+  Ok(DepsReport {
+    schema_version: SCHEMA_VERSION,
+    source: canonical_source(repo),
+    from: from.to_string(),
+    to: to.to_string(),
+    lockfiles,
+  })
+}
+
+fn parse_lockfile(kind: &str, content: &str) -> BTreeMap<String, Vec<String>> {
+  let mut sets: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+  match kind {
+    "Cargo.lock" | "uv.lock" => {
+      let mut in_pkg = false;
+      let mut name: Option<String> = None;
+      let mut version: Option<String> = None;
+      let flush = |sets: &mut BTreeMap<String, BTreeSet<String>>,
+                   name: &mut Option<String>,
+                   version: &mut Option<String>| {
+        if let (Some(n), Some(v)) = (name.take(), version.take()) {
+          sets.entry(n).or_default().insert(v);
+        }
+      };
+      for raw in content.lines() {
+        let line = raw.trim();
+        if line.starts_with('[') {
+          flush(&mut sets, &mut name, &mut version);
+          in_pkg = line == "[[package]]";
+          continue;
+        }
+        if !in_pkg {
+          continue;
+        }
+        if let Some(rest) = line.strip_prefix("name = ")
+          && let Some(val) = unquote(rest)
+        {
+          name = Some(val.to_string());
+        } else if let Some(rest) = line.strip_prefix("version = ")
+          && let Some(val) = unquote(rest)
+        {
+          version = Some(val.to_string());
+        }
+      }
+      flush(&mut sets, &mut name, &mut version);
+    }
+    "package-lock.json" => {
+      if let Ok(json) = serde_json::from_str::<serde_json::Value>(content) {
+        if let Some(packages) = json.get("packages").and_then(|v| v.as_object()) {
+          for (key, val) in packages {
+            let Some(ver) = val.get("version").and_then(|v| v.as_str()) else {
+              continue;
+            };
+            let pkg = key.rsplit("node_modules/").next().unwrap_or("");
+            if !key.is_empty() && !pkg.is_empty() {
+              sets
+                .entry(pkg.to_string())
+                .or_default()
+                .insert(ver.to_string());
+            }
+          }
+        } else if let Some(deps) = json.get("dependencies").and_then(|v| v.as_object()) {
+          for (pkg, val) in deps {
+            if let Some(ver) = val.get("version").and_then(|v| v.as_str()) {
+              sets.entry(pkg.clone()).or_default().insert(ver.to_string());
+            }
+          }
+        }
+      }
+    }
+    "go.sum" => {
+      for line in content.lines() {
+        let mut parts = line.split_whitespace();
+        let (Some(module), Some(ver)) = (parts.next(), parts.next()) else {
+          continue;
+        };
+        let ver = ver.strip_suffix("/go.mod").unwrap_or(ver);
+        sets
+          .entry(module.to_string())
+          .or_default()
+          .insert(ver.to_string());
+      }
+    }
+    _ => {}
+  }
+  sets
+    .into_iter()
+    .map(|(k, set)| {
+      let mut vers: Vec<String> = set.into_iter().collect();
+      vers.sort_by(|a, b| compare_versions(a, b));
+      (k, vers)
+    })
+    .collect()
+}
+
+fn unquote(s: &str) -> Option<&str> {
+  s.trim().strip_prefix('"')?.strip_suffix('"')
 }
 
 fn canonical_source(repo: &Path) -> String {
@@ -950,5 +1108,84 @@ mod tests {
     assert_eq!(head.base_tag.as_deref(), Some("v0.2.0"));
     assert_eq!(head.ahead, 1);
     assert_eq!(head.first_tag, None, "HEAD is after the latest tag");
+  }
+
+  #[test]
+  fn deps_diffs_cargo_uv_npm_and_go_lockfiles() {
+    let repo = TempRepo::new("deps-diff");
+    repo.commit_file(
+      "Cargo.lock",
+      "[[package]]\nname = \"serde\"\nversion = \"1.0.200\"\n\n\
+       [[package]]\nname = \"old-crate\"\nversion = \"0.1.0\"\n",
+    );
+    repo.commit_file(
+      "uv.lock",
+      "[[package]]\nname = \"pydantic\"\nversion = \"2.8.0\"\n",
+    );
+    repo.commit_file(
+      "package-lock.json",
+      r#"{"packages":{"":{"name":"app"},"node_modules/react":{"version":"18.2.0"}}}"#,
+    );
+    repo.commit_file("go.sum", "golang.org/x/sys v0.19.0 h1:abc\n");
+    repo.run(&["tag", "v0.1.0"]);
+
+    repo.commit_file(
+      "Cargo.lock",
+      "[[package]]\nname = \"serde\"\nversion = \"1.0.210\"\n\n\
+       [[package]]\nname = \"new-crate\"\nversion = \"0.2.0\"\n",
+    );
+    repo.commit_file(
+      "uv.lock",
+      "[[package]]\nname = \"pydantic\"\nversion = \"2.9.2\"\n",
+    );
+    repo.commit_file(
+      "package-lock.json",
+      r#"{"packages":{"":{"name":"app"},"node_modules/react":{"version":"18.3.1"}}}"#,
+    );
+    repo.commit_file("go.sum", "golang.org/x/sys v0.20.0 h1:def\n");
+    repo.run(&["tag", "v0.2.0"]);
+
+    let report = deps(&repo.0, "v0.1.0", "v0.2.0").unwrap();
+    assert_eq!(report.lockfiles.len(), 4);
+
+    let cargo = report
+      .lockfiles
+      .iter()
+      .find(|l| l.file == "Cargo.lock")
+      .unwrap();
+    assert_eq!(cargo.added[0].name, "new-crate");
+    assert_eq!(cargo.added[0].to, ["0.2.0"]);
+    assert_eq!(cargo.removed[0].name, "old-crate");
+    assert_eq!(cargo.removed[0].from, ["0.1.0"]);
+    assert_eq!(cargo.updated[0].name, "serde");
+    assert_eq!(cargo.updated[0].from, ["1.0.200"]);
+    assert_eq!(cargo.updated[0].to, ["1.0.210"]);
+
+    let uv = report
+      .lockfiles
+      .iter()
+      .find(|l| l.file == "uv.lock")
+      .unwrap();
+    assert_eq!(uv.updated[0].name, "pydantic");
+    assert_eq!(uv.updated[0].from, ["2.8.0"]);
+    assert_eq!(uv.updated[0].to, ["2.9.2"]);
+
+    let npm = report
+      .lockfiles
+      .iter()
+      .find(|l| l.file == "package-lock.json")
+      .unwrap();
+    assert_eq!(npm.updated[0].name, "react");
+    assert_eq!(npm.updated[0].from, ["18.2.0"]);
+    assert_eq!(npm.updated[0].to, ["18.3.1"]);
+
+    let go = report
+      .lockfiles
+      .iter()
+      .find(|l| l.file == "go.sum")
+      .unwrap();
+    assert_eq!(go.updated[0].name, "golang.org/x/sys");
+    assert_eq!(go.updated[0].from, ["v0.19.0"]);
+    assert_eq!(go.updated[0].to, ["v0.20.0"]);
   }
 }

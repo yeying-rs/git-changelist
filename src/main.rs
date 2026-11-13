@@ -104,6 +104,16 @@ enum Command {
     #[arg(default_value = ".")]
     target: PathBuf,
   },
+  /// 对比两个版本之间的依赖锁文件变更（Cargo.lock / uv.lock / package-lock.json / go.sum）
+  Deps {
+    /// 起始版本或引用
+    from: String,
+    /// 目标版本或引用
+    to: String,
+    /// 本地仓库路径
+    #[arg(default_value = ".")]
+    target: PathBuf,
+  },
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -158,6 +168,13 @@ fn run(cli: Cli) -> Result<()> {
         match cli.format {
           Format::Json => serde_json::to_string_pretty(&report)? + "\n",
           _ => render::which_text(&report, cli.lang),
+        }
+      }
+      Command::Deps { from, to, target } => {
+        let report = local::deps(&target, &from, &to)?;
+        match cli.format {
+          Format::Json => serde_json::to_string_pretty(&report)? + "\n",
+          _ => render::deps_text(&report, cli.lang),
         }
       }
     };
