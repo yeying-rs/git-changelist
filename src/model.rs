@@ -43,6 +43,15 @@ pub struct Trailer {
   pub value: String,
 }
 
+/// Per-file diff stat from `git log --numstat`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FileChange {
+  pub path: String,
+  /// `None` for binary files.
+  pub additions: Option<u64>,
+  pub deletions: Option<u64>,
+}
+
 /// A commit as read from git / GitHub, before classification.
 #[derive(Debug, Clone)]
 pub struct RawCommit {
@@ -51,6 +60,7 @@ pub struct RawCommit {
   pub date: String,
   pub subject: String,
   pub body: String,
+  pub files: Vec<FileChange>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -68,6 +78,8 @@ pub struct Commit {
   pub body: Option<String>,
   #[serde(skip_serializing_if = "Vec::is_empty")]
   pub trailers: Vec<Trailer>,
+  #[serde(skip_serializing_if = "Vec::is_empty")]
+  pub files: Vec<FileChange>,
   pub pr: Option<u64>,
   /// SHA of an earlier commit that this commit reverts.
   #[serde(skip_serializing_if = "Option::is_none")]
@@ -124,4 +136,7 @@ pub struct Selection {
   pub unreleased: bool,
   pub max_commits: usize,
   pub merges: bool,
+  pub paths: Vec<String>,
+  pub grep: Option<String>,
+  pub files: bool,
 }

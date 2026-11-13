@@ -46,6 +46,18 @@ struct Cli {
   #[arg(long)]
   merges: bool,
 
+  /// 只看触及指定文件或目录的提交（可多次传入，仅本地仓库）
+  #[arg(long = "path", value_name = "PATH")]
+  paths: Vec<String>,
+
+  /// 只看标题、正文、SHA 或 PR 匹配关键词的提交（不区分大小写）
+  #[arg(long, value_name = "TEXT")]
+  grep: Option<String>,
+
+  /// 附带每个提交修改的文件与增删行数（仅本地仓库）
+  #[arg(long)]
+  files: bool,
+
   /// 本地模式下，按 origin 拉取 GitHub Release Notes 合并展示
   #[arg(long)]
   github: bool,
@@ -116,6 +128,9 @@ fn run(cli: Cli) -> Result<()> {
     unreleased: cli.unreleased,
     max_commits: cli.max_commits,
     merges: cli.merges,
+    paths: cli.paths,
+    grep: cli.grep,
+    files: cli.files,
   };
   let path = PathBuf::from(&cli.target);
   let mut report = if path.is_dir() {

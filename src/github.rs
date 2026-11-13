@@ -11,7 +11,7 @@ use reqwest::blocking::Client;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
-use crate::classify::{classify, link_reverts};
+use crate::classify::{classify, link_reverts, matches_grep};
 use crate::model::{RawCommit, Release, Report, SCHEMA_VERSION, Selection, Version};
 
 const API: &str = "https://api.github.com";
@@ -202,6 +202,7 @@ impl GitHub {
           date,
           subject: subject.to_string(),
           body: body.trim().to_string(),
+          files: Vec::new(),
         }
       })
       .collect();
@@ -252,6 +253,15 @@ pub fn collect(slug: &str, selection: &Selection, github: &GitHub) -> Result<Rep
   let mut releases = github.releases(slug)?;
   let mut versions = Vec::with_capacity(ranges.len());
   let mut warnings = Vec::new();
+  if selection.files {
+    warnings.push(
+      "GitHub 远端模式不支持 --files（Compare API 不返回每个提交的文件明细）；请克隆到本地仓库运行"
+        .to_string(),
+    );
+  }
+  if !selection.paths.is_empty() {
+    warnings.push("GitHub 远端模式不支持 --path 按路径过滤；请克隆到本地仓库运行".to_string());
+  }
   if selection.range.is_some() && ranges.len() > 1 {
     warnings.push(
       "GitHub 远端模式按版本号切分区间，未做本地 cherry-pick 补丁去重；如需 hotfix 分支精确去重请克隆到本地运行"
@@ -260,7 +270,7 @@ pub fn collect(slug: &str, selection: &Selection, github: &GitHub) -> Result<Rep
   }
   for (tag, previous, head) in ranges {
     // The first version has no base to compare against; skip its history to save requests.
-    let (raw_commits, total_commits) = match &previous {
+    let (raw_commits, mut total_commits) = match &previous {
       Some(base) => github.compare(slug, base, &head, selection)?,
       None => (Vec::new(), 0),
     };
@@ -274,6 +284,10 @@ pub fn collect(slug: &str, selection: &Selection, github: &GitHub) -> Result<Rep
       .or_else(|| raw_commits.first().map(|c| c.date.clone()));
     let mut commits: Vec<_> = raw_commits.into_iter().map(classify).collect();
     link_reverts(&mut commits);
+    if let Some(query) = &selection.grep {
+      commits.retain(|c| matches_grep(c, query));
+      total_commits = commits.len();
+    }
     let truncated = total_commits > commits.len();
     if truncated {
       warnings.push(format!(

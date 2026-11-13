@@ -190,6 +190,18 @@ pub fn text(report: &Report, lang: Lang, color: bool) -> String {
           commit.summary,
           paint(sha, "2")
         );
+        if !commit.files.is_empty() {
+          let files = commit
+            .files
+            .iter()
+            .map(|f| match (f.additions, f.deletions) {
+              (Some(a), Some(d)) => format!("{} (+{a}/-{d})", f.path),
+              _ => f.path.clone(),
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+          let _ = writeln!(out, "      {}", paint(&files, "2"));
+        }
       }
     }
     if let Some(note) = truncation_note(version, texts) {
@@ -331,6 +343,7 @@ mod tests {
       summary: summary.into(),
       body: None,
       trailers: Vec::new(),
+      files: Vec::new(),
       pr: None,
       reverts: None,
       reverted_by: None,

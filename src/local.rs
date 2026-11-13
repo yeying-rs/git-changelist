@@ -7,9 +7,9 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
-use crate::classify::{classify, link_reverts};
+use crate::classify::{classify, link_reverts, matches_grep};
 use crate::github::{compare_versions, parse_slug, tag_prefix};
-use crate::model::{RawCommit, Report, SCHEMA_VERSION, Selection, Version};
+use crate::model::{FileChange, RawCommit, Report, SCHEMA_VERSION, Selection, Version};
 
 const FIELD: char = '\x1f';
 const RECORD: char = '\x1e';
@@ -52,7 +52,7 @@ pub fn collect(repo: &Path, selection: &Selection) -> Result<Report> {
   for (tag, previous) in ranges {
     let head = tag.as_deref().unwrap_or("HEAD");
     let revisions = revisions(previous.as_deref(), head);
-    let total_commits = count_commits(repo, &revisions, selection.merges)?;
+    let mut total_commits = count_commits(repo, &revisions, selection)?;
     // Only an unreleased range can be legitimately empty; hide it instead of showing noise.
     if tag.is_none() && total_commits == 0 && !tags.is_empty() {
       continue;
@@ -65,6 +65,11 @@ pub fn collect(repo: &Path, selection: &Selection) -> Result<Report> {
       .map(classify)
       .collect();
     link_reverts(&mut commits);
+    if let Some(query) = &selection.grep {
+      commits.retain(|c| matches_grep(c, query));
+      total_commits = commits.len();
+      commits.truncate(selection.max_commits);
+    }
     let truncated = total_commits > commits.len();
     if truncated {
       warnings.push(format!(
@@ -220,12 +225,16 @@ fn revisions(previous: Option<&str>, head: &str) -> Vec<String> {
   }
 }
 
-fn count_commits(repo: &Path, revisions: &[String], merges: bool) -> Result<usize> {
+fn count_commits(repo: &Path, revisions: &[String], selection: &Selection) -> Result<usize> {
   let mut args = vec!["rev-list", "--count"];
-  if !merges {
+  if !selection.merges {
     args.push("--no-merges");
   }
   args.extend(revisions.iter().map(String::as_str));
+  if !selection.paths.is_empty() {
+    args.push("--");
+    args.extend(selection.paths.iter().map(String::as_str));
+  }
   let out = git(repo, &args)?;
   out
     .trim()
@@ -235,26 +244,58 @@ fn count_commits(repo: &Path, revisions: &[String], merges: bool) -> Result<usiz
 
 fn log(repo: &Path, revisions: &[String], selection: &Selection) -> Result<Vec<RawCommit>> {
   let max = format!("--max-count={}", selection.max_commits);
-  let mut args = vec!["log", "--format=%H%x1f%an%x1f%as%x1f%s%x1f%b%x1e", &max];
+  // Put RECORD at the start of the format so trailing `--numstat` lines stay inside the same record.
+  let mut args = vec!["log", "--format=%x1e%H%x1f%an%x1f%as%x1f%s%x1f%b%x1f"];
+  if selection.grep.is_none() {
+    args.push(&max);
+  }
   if !selection.merges {
     args.push("--no-merges");
   }
+  if selection.files {
+    args.push("--numstat");
+  }
   args.extend(revisions.iter().map(String::as_str));
+  if !selection.paths.is_empty() {
+    args.push("--");
+    args.extend(selection.paths.iter().map(String::as_str));
+  }
   let out = git(repo, &args)?;
   Ok(
     records(&out)
       .filter_map(|fields| match fields.as_slice() {
-        [sha, author, date, subject, body] => Some(RawCommit {
+        [sha, author, date, subject, body, stat] => Some(RawCommit {
           sha: sha.to_string(),
           author: author.to_string(),
           date: date.to_string(),
           subject: subject.to_string(),
           body: body.to_string(),
+          files: parse_numstat(stat),
         }),
         _ => None,
       })
       .collect(),
   )
+}
+
+fn parse_numstat(stat: &str) -> Vec<FileChange> {
+  stat
+    .lines()
+    .filter_map(|line| {
+      let mut parts = line.trim().splitn(3, '\t');
+      let added = parts.next()?;
+      let deleted = parts.next()?;
+      let path = parts.next()?.trim();
+      if path.is_empty() {
+        return None;
+      }
+      Some(FileChange {
+        path: path.to_string(),
+        additions: added.parse().ok(),
+        deletions: deleted.parse().ok(),
+      })
+    })
+    .collect()
 }
 
 fn records(out: &str) -> impl Iterator<Item = Vec<&str>> {
@@ -315,7 +356,11 @@ mod tests {
 
     /// A commit with a real diff, so `--cherry-pick` can match it by patch id.
     fn commit_file(&self, file: &str, message: &str) {
-      std::fs::write(self.0.join(file), message).unwrap();
+      let path = self.0.join(file);
+      if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).unwrap();
+      }
+      std::fs::write(path, message).unwrap();
       self.run(&["add", file]);
       self.run(&["commit", "-q", "-m", message]);
     }
@@ -335,6 +380,9 @@ mod tests {
       unreleased: false,
       max_commits: 200,
       merges: false,
+      paths: Vec::new(),
+      grep: None,
+      files: false,
     }
   }
 
@@ -571,5 +619,67 @@ mod tests {
     std::fs::create_dir_all(&dir).unwrap();
     assert!(collect(&dir, &selection()).is_err());
     let _ = std::fs::remove_dir_all(&dir);
+  }
+
+  #[test]
+  fn files_flag_collects_numstat_and_path_and_grep_filter_commits() {
+    let repo = TempRepo::new("files-path-grep");
+    repo.commit_file("src/a.rs", "feat: init a");
+    repo.run(&["tag", "v0.1.0"]);
+    repo.commit_file("src/a.rs", "fix(core): memory timeout in a");
+    repo.commit_file("docs/readme.md", "docs: update guide");
+    repo.run(&["tag", "v0.2.0"]);
+
+    let with_files = collect(
+      &repo.0,
+      &Selection {
+        tag: Some("v0.2.0".into()),
+        files: true,
+        ..selection()
+      },
+    )
+    .unwrap();
+    assert_eq!(with_files.versions[0].commits.len(), 2);
+    assert_eq!(
+      with_files.versions[0].commits[0].files[0].path,
+      "docs/readme.md"
+    );
+    assert_eq!(
+      with_files.versions[0].commits[0].files[0].additions,
+      Some(1)
+    );
+    assert_eq!(with_files.versions[0].commits[1].files[0].path, "src/a.rs");
+
+    let by_path = collect(
+      &repo.0,
+      &Selection {
+        tag: Some("v0.2.0".into()),
+        paths: vec!["src/".into()],
+        ..selection()
+      },
+    )
+    .unwrap();
+    assert_eq!(by_path.versions[0].total_commits, 1);
+    assert_eq!(by_path.versions[0].commits.len(), 1);
+    assert_eq!(
+      by_path.versions[0].commits[0].summary,
+      "memory timeout in a"
+    );
+
+    let by_grep = collect(
+      &repo.0,
+      &Selection {
+        tag: Some("v0.2.0".into()),
+        grep: Some("TIMEOUT".into()),
+        ..selection()
+      },
+    )
+    .unwrap();
+    assert_eq!(by_grep.versions[0].total_commits, 1);
+    assert_eq!(by_grep.versions[0].commits.len(), 1);
+    assert_eq!(
+      by_grep.versions[0].commits[0].summary,
+      "memory timeout in a"
+    );
   }
 }

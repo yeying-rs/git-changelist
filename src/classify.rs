@@ -169,10 +169,35 @@ pub fn classify(raw: RawCommit) -> Commit {
     summary: summary.to_string(),
     body,
     trailers,
+    files: raw.files,
     pr,
     reverts,
     reverted_by: None,
   }
+}
+
+/// Case-insensitive match against a commit's summary, body, scope, SHA, PR number, or trailers.
+pub fn matches_grep(commit: &Commit, query: &str) -> bool {
+  let needle = query.trim().to_lowercase();
+  if needle.is_empty() {
+    return true;
+  }
+  let pr_str = commit.pr.map(|n| format!("#{n}"));
+  commit.summary.to_lowercase().contains(&needle)
+    || commit.sha.to_lowercase().contains(&needle)
+    || commit
+      .scope
+      .as_ref()
+      .is_some_and(|s| s.to_lowercase().contains(&needle))
+    || commit
+      .body
+      .as_ref()
+      .is_some_and(|b| b.to_lowercase().contains(&needle))
+    || pr_str.as_ref().is_some_and(|p| p == &needle)
+    || commit
+      .trailers
+      .iter()
+      .any(|t| t.value.to_lowercase().contains(&needle))
 }
 
 /// Pairs revert commits with the original commit they revert when both appear in `commits`.
@@ -431,6 +456,7 @@ mod tests {
       date: "2026-01-01".into(),
       subject: subject.into(),
       body: body.into(),
+      files: Vec::new(),
     })
   }
 
@@ -577,6 +603,7 @@ mod tests {
         date: "2026-01-02".into(),
         subject: "Revert \"feat: risky change\"".into(),
         body: "This reverts commit 111111111111.".into(),
+        files: Vec::new(),
       }),
       classify(RawCommit {
         sha: "111111111111".into(),
@@ -584,6 +611,7 @@ mod tests {
         date: "2026-01-01".into(),
         subject: "feat: risky change".into(),
         body: String::new(),
+        files: Vec::new(),
       }),
     ];
     link_reverts(&mut commits);

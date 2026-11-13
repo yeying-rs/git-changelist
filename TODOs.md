@@ -10,7 +10,7 @@
 | 6 | README、release 构建与 `cargo install` 安装验证 | DONE（release 7.4M，已安装到 ~/.cargo/bin） |
 | 7 | 更新设计文档 `docs/design.md` 与 `TODOs.md`（v0.2 面向 AI 的版本事实契约与排查子命令） | DONE（已补充 JSON 事实契约、find/which/deps 与 Skill 规划） |
 | 8 | 完善 JSON 事实契约：`schema_version`、`body`、`trailers`、`classified_by`、`reverts`/`reverted_by`、`truncated`、`warnings[]` | DONE（32 个单元测试通过，含 trailer/revert/truncation 校验） |
-| 9 | 提交改动文件统计 `--files`（`--numstat`）及过滤参数 `--path`、`--grep` | TODO |
+| 9 | 提交改动文件统计 `--files`（`--numstat`）及过滤参数 `--path`、`--grep` | DONE（单次 git log --numstat 采集文件增删统计，支持路径与关键词过滤） |
 | 10 | 版本排查子命令 `taglens find <QUERY>` 与 `taglens which <REV>` | TODO |
 | 11 | 依赖锁文件变更对比子命令 `taglens deps <FROM> <TO>`（`Cargo.lock`、`uv.lock`、`package-lock.json`、`go.sum`） | TODO |
 | 12 | 编写 `skills/taglens/SKILL.md`，更新 `scripts/install.sh`、`README.md` 与 `AGENTS.md` | TODO |
