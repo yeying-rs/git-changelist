@@ -1,5 +1,6 @@
 //! Local repository collector, driven by the system `git` binary.
 
+use std::collections::HashSet;
 use std::path::Path;
 use std::process::Command;
 
@@ -26,21 +27,21 @@ pub fn collect(repo: &Path, selection: &Selection) -> Result<Report> {
   // (tag, previous); tag `None` means HEAD (unreleased).
   let mut ranges: Vec<(Option<String>, Option<String>)> = Vec::new();
   if let Some((from, to)) = &selection.range {
-    ranges.push((Some(to.clone()), Some(from.clone())));
+    ranges.extend(split_range(repo, &tags, from, to)?);
   } else if let Some(tag) = &selection.tag {
     if !tags.iter().any(|t| &t.name == tag) {
       bail!("找不到 Tag：{tag}");
     }
     ranges.push((
       Some(tag.clone()),
-      previous_tag(repo, &format!("{tag}^"), Some(tag)),
+      previous_tag(repo, &format!("{tag}^"), Some(tag_prefix(tag))),
     ));
   } else {
     if selection.unreleased || tags.is_empty() {
       ranges.push((None, previous_tag(repo, "HEAD", None)));
     }
     for tag in tags.iter().take(selection.limit) {
-      let previous = previous_tag(repo, &format!("{}^", tag.name), Some(&tag.name));
+      let previous = previous_tag(repo, &format!("{}^", tag.name), Some(tag_prefix(&tag.name)));
       ranges.push((Some(tag.name.clone()), previous));
     }
   }
@@ -75,7 +76,12 @@ pub fn collect(repo: &Path, selection: &Selection) -> Result<Report> {
   }
 
   Ok(Report {
-    source: repo.display().to_string(),
+    // `.` makes a useless heading in exported files.
+    source: repo
+      .canonicalize()
+      .unwrap_or_else(|_| repo.to_path_buf())
+      .display()
+      .to_string(),
     github: origin_url(repo).as_deref().and_then(parse_slug),
     versions,
   })
@@ -119,13 +125,52 @@ fn list_tags(repo: &Path) -> Result<Vec<Tag>> {
 }
 
 /// Nearest tag reachable from `rev`; `None` when there is none (e.g. the first tag).
-/// With `like`, only tags sharing its prefix count, so monorepo crates don't interleave.
-fn previous_tag(repo: &Path, rev: &str, like: Option<&str>) -> Option<String> {
-  let pattern = like.map(|tag| format!("--match={}[0-9]*", tag_prefix(tag)));
+/// With `prefix`, only tags sharing it count, so monorepo packages don't interleave.
+fn previous_tag(repo: &Path, rev: &str, prefix: Option<&str>) -> Option<String> {
+  let pattern = prefix.map(|prefix| format!("--match={prefix}[0-9]*"));
   let mut args = vec!["describe", "--tags", "--abbrev=0"];
   args.extend(pattern.as_deref());
   args.push(rev);
   git(repo, &args).ok().map(|s| s.trim().to_string())
+}
+
+/// Splits `from..to` at every tag in between that shares the endpoints' prefix, newest first,
+/// so each change is attributed to the version that introduced it.
+/// Without a tag endpoint there is no prefix to go by, and the range stays one block.
+fn split_range(
+  repo: &Path,
+  tags: &[Tag],
+  from: &str,
+  to: &str,
+) -> Result<Vec<(Option<String>, Option<String>)>> {
+  let is_tag = |name: &str| tags.iter().any(|t| t.name == name);
+  let prefix = match (is_tag(to), is_tag(from)) {
+    (true, _) => tag_prefix(to),
+    (false, true) => tag_prefix(from),
+    (false, false) => return Ok(vec![(Some(to.to_string()), Some(from.to_string()))]),
+  };
+  let merged = format!("--merged={to}");
+  let not_merged = format!("--no-merged={from}");
+  let inside = git(repo, &["tag", "--list", &merged, &not_merged])?;
+  let inside: HashSet<&str> = inside.lines().collect();
+
+  // `tags` is newest first, so the heads come out newest first too.
+  let between = tags
+    .iter()
+    .map(|t| t.name.as_str())
+    .filter(|name| *name != to && inside.contains(name) && tag_prefix(name) == prefix);
+  Ok(
+    std::iter::once(to)
+      .chain(between)
+      .map(|head| {
+        // A previous tag outside the range (e.g. on another branch) is clamped to `from`.
+        let previous = previous_tag(repo, &format!("{head}^"), Some(prefix))
+          .filter(|p| p != head && inside.contains(p.as_str()))
+          .unwrap_or_else(|| from.to_string());
+        (Some(head.to_string()), Some(previous))
+      })
+      .collect(),
+  )
 }
 
 fn count_commits(repo: &Path, range: &str, merges: bool) -> Result<usize> {
@@ -311,17 +356,6 @@ mod tests {
       .is_err()
     );
 
-    let range = Some(("v0.1.0".to_string(), "HEAD".to_string()));
-    let ranged = collect(
-      &repo.0,
-      &Selection {
-        range,
-        ..selection()
-      },
-    )
-    .unwrap();
-    assert_eq!(ranged.versions[0].total_commits, 3);
-
     let limited = collect(
       &repo.0,
       &Selection {
@@ -331,6 +365,77 @@ mod tests {
     )
     .unwrap();
     assert_eq!(limited.versions.len(), 1);
+  }
+
+  fn segments(report: &Report) -> Vec<(String, String, usize)> {
+    report
+      .versions
+      .iter()
+      .map(|v| {
+        let tag = v.tag.clone().unwrap_or_default();
+        (tag, v.previous.clone().unwrap_or_default(), v.total_commits)
+      })
+      .collect()
+  }
+
+  fn range(repo: &TempRepo, from: &str, to: &str) -> Report {
+    let range = Some((from.to_string(), to.to_string()));
+    collect(
+      &repo.0,
+      &Selection {
+        range,
+        ..selection()
+      },
+    )
+    .unwrap()
+  }
+
+  /// v0.1.0 · v0.2.0 · react@0.1.0 · v0.2.1 · v0.3.0 · (HEAD)
+  fn release_line(name: &str) -> TempRepo {
+    let repo = TempRepo::new(name);
+    for (message, tag) in [
+      ("feat: a", "v0.1.0"),
+      ("feat: b", "v0.2.0"),
+      ("feat(react): ui", "react@0.1.0"),
+      ("fix: c", "v0.2.1"),
+      ("feat: d", "v0.3.0"),
+    ] {
+      repo.commit(message);
+      repo.run(&["tag", tag]);
+    }
+    repo.commit("feat: unreleased");
+    repo
+  }
+
+  #[test]
+  fn range_between_tags_is_split_per_version() {
+    let repo = release_line("range-split");
+    let expected = [
+      ("v0.3.0".to_string(), "v0.2.1".to_string(), 1),
+      ("v0.2.1".to_string(), "v0.2.0".to_string(), 2),
+      ("v0.2.0".to_string(), "v0.1.0".to_string(), 1),
+    ];
+    assert_eq!(segments(&range(&repo, "v0.1.0", "v0.3.0")), expected);
+  }
+
+  #[test]
+  fn range_to_non_tag_head_keeps_it_as_first_segment() {
+    let repo = release_line("range-head");
+    let expected = [
+      ("HEAD".to_string(), "v0.3.0".to_string(), 1),
+      ("v0.3.0".to_string(), "v0.2.1".to_string(), 1),
+    ];
+    assert_eq!(segments(&range(&repo, "v0.2.1", "HEAD")), expected);
+  }
+
+  #[test]
+  fn range_without_tag_endpoints_is_one_block() {
+    let repo = release_line("range-plain");
+    let report = range(&repo, "HEAD~3", "HEAD");
+    assert_eq!(
+      segments(&report),
+      [("HEAD".to_string(), "HEAD~3".to_string(), 3)]
+    );
   }
 
   #[test]

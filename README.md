@@ -59,5 +59,7 @@ taglens . -f json --lang en
 - GitHub 单个区间最多返回 250 个提交，超出时会标注「仅显示 N / 共 M」。
 - GitHub 模式下，最早的版本没有可比较的前序 Tag，不展示提交明细。
 - monorepo 中按 Tag 前缀分组（如 `tokio-` 与 `tokio-macros-`），Tag 数最多的包排在前面；可用 `--tag` 精确指定。
+- `--range A B` 会在中间每个同前缀的 Tag 处分段，每条提交归到引入它的版本下。本地模式只按 git 历史分段，
+  不在 B 祖先链上的 Tag（如未合回主线的 hotfix 分支 Tag）不会出现；GitHub 模式没有历史信息，只按版本号排序分段。
 
 设计细节见 [docs/design.md](docs/design.md)。

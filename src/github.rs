@@ -229,7 +229,9 @@ pub fn collect(slug: &str, selection: &Selection, github: &GitHub) -> Result<Rep
   // (tag or None for unreleased, previous, head ref)
   let mut ranges: Vec<(Option<String>, Option<String>, String)> = Vec::new();
   if let Some((from, to)) = &selection.range {
-    ranges.push((Some(to.clone()), Some(from.clone()), to.clone()));
+    for (head, previous) in split_range(&groups, from, to) {
+      ranges.push((Some(head.clone()), Some(previous), head));
+    }
   } else if let Some(tag) = &selection.tag {
     if !ordered.iter().any(|t| *t == tag) {
       bail!("找不到 Tag：{tag}");
@@ -309,6 +311,31 @@ fn remote_tags(slug: &str) -> Result<Vec<String>> {
       })
       .collect(),
   )
+}
+
+/// `(head, previous)` segments of `from..to`, split at every tag of the endpoints' prefix group
+/// whose version lies between them, newest first. Without a tag endpoint it stays one block.
+fn split_range(groups: &[Vec<String>], from: &str, to: &str) -> Vec<(String, String)> {
+  let Some(group) = groups
+    .iter()
+    .find(|g| g.iter().any(|t| t == to || t == from))
+  else {
+    return vec![(to.to_string(), from.to_string())];
+  };
+  let to_is_tag = group.iter().any(|t| t == to);
+  let from_is_tag = group.iter().any(|t| t == from);
+  let mut heads: Vec<&str> = vec![to];
+  heads.extend(group.iter().map(String::as_str).filter(|t| {
+    let below_to = !to_is_tag || compare_versions(t, to) == Ordering::Less;
+    let above_from = !from_is_tag || compare_versions(t, from) == Ordering::Greater;
+    *t != to && *t != from && below_to && above_from
+  }));
+  let previous = heads.iter().skip(1).copied().chain(std::iter::once(from));
+  heads
+    .iter()
+    .zip(previous)
+    .map(|(head, previous)| (head.to_string(), previous.to_string()))
+    .collect()
 }
 
 /// Groups tags by their non-numeric prefix, each sorted newest version first;
@@ -449,6 +476,44 @@ mod tests {
     let groups = group_tags(tags.iter().map(|t| t.to_string()).collect());
     assert_eq!(groups[0], ["tokio-1.10.0", "tokio-1.9.0", "tokio-1.2.0"]);
     assert_eq!(groups[1], ["tokio-macros-0.2.0", "tokio-macros-0.1.0"]);
+  }
+
+  #[test]
+  fn range_is_split_within_prefix_group() {
+    let tags = [
+      "v0.5.4.1",
+      "v0.5.4",
+      "v0.5.3",
+      "react@0.1.9",
+      "v0.5.2",
+      "v0.5.1.1",
+      "v0.5.1",
+    ];
+    let groups = group_tags(tags.iter().map(|t| t.to_string()).collect());
+    let pairs = |from, to| -> Vec<(String, String)> { split_range(&groups, from, to) };
+    let expected = [
+      ("v0.5.4.1", "v0.5.4"),
+      ("v0.5.4", "v0.5.3"),
+      ("v0.5.3", "v0.5.2"),
+      ("v0.5.2", "v0.5.1.1"),
+    ];
+    let expected: Vec<_> = expected
+      .iter()
+      .map(|(a, b)| (a.to_string(), b.to_string()))
+      .collect();
+    assert_eq!(pairs("v0.5.1.1", "v0.5.4.1"), expected);
+    // Branch head: every tag above `from` precedes it.
+    assert_eq!(
+      pairs("v0.5.4", "main")[..2],
+      [
+        ("main".into(), "v0.5.4.1".into()),
+        ("v0.5.4.1".into(), "v0.5.4".into())
+      ]
+    );
+    assert_eq!(
+      pairs("abc123", "def456"),
+      [("def456".to_string(), "abc123".to_string())]
+    );
   }
 
   #[test]
