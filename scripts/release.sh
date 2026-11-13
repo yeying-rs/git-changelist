@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Cut a release: bump the version, run the quality gate, commit and create an annotated tag
-# whose message is the change summary produced by git-changes itself.
+# whose message is the change summary produced by git-changelist itself.
 # Usage: scripts/release.sh 0.2.0
 # Nothing is pushed; the script prints the push command at the end.
 set -euo pipefail

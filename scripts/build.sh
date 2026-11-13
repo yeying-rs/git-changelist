@@ -15,7 +15,7 @@ for ((i = 1; i <= $#; i++)); do
     target_triple="${!next}"
   fi
 done
-binary="$target_dir/${target_triple:+$target_triple/}release/git-changes"
+binary="$target_dir/${target_triple:+$target_triple/}release/git-changelist"
 
 if [[ ! -x "$binary" ]]; then
   echo "error: binary not found at $binary" >&2

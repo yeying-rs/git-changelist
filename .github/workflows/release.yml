@@ -42,30 +42,30 @@ jobs:
       - name: Package (Unix)
         if: matrix.archive == 'tar.gz'
         run: |
-          stage="git-changes-${{ github.ref_name }}-${{ matrix.target }}"
-          mkdir -p "$stage/skills/git-changes"
-          cp "target/${{ matrix.target }}/release/git-changes" "$stage/"
+          stage="git-changelist-${{ github.ref_name }}-${{ matrix.target }}"
+          mkdir -p "$stage/skills/git-changelist"
+          cp "target/${{ matrix.target }}/release/git-changelist" "$stage/"
           cp README.md LICENSE "$stage/"
-          cp skills/git-changes/SKILL.md "$stage/skills/git-changes/SKILL.md"
+          cp skills/git-changelist/SKILL.md "$stage/skills/git-changelist/SKILL.md"
           tar -czf "${stage}.tar.gz" "$stage"
-          cp "${stage}.tar.gz" "git-changes-${{ matrix.target }}.tar.gz"
+          cp "${stage}.tar.gz" "git-changelist-${{ matrix.target }}.tar.gz"
       - name: Package (Windows)
         if: matrix.archive == 'zip'
         shell: pwsh
         run: |
-          $stage = "git-changes-${{ github.ref_name }}-${{ matrix.target }}"
-          New-Item -ItemType Directory -Force -Path "$stage/skills/git-changes" | Out-Null
-          Copy-Item "target/${{ matrix.target }}/release/git-changes.exe" "$stage/"
+          $stage = "git-changelist-${{ github.ref_name }}-${{ matrix.target }}"
+          New-Item -ItemType Directory -Force -Path "$stage/skills/git-changelist" | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/git-changelist.exe" "$stage/"
           Copy-Item README.md, LICENSE "$stage/"
-          Copy-Item skills/git-changes/SKILL.md "$stage/skills/git-changes/SKILL.md"
+          Copy-Item skills/git-changelist/SKILL.md "$stage/skills/git-changelist/SKILL.md"
           Compress-Archive -Path "$stage" -DestinationPath "${stage}.zip"
-          Copy-Item "${stage}.zip" "git-changes-${{ matrix.target }}.zip"
+          Copy-Item "${stage}.zip" "git-changelist-${{ matrix.target }}.zip"
       - uses: actions/upload-artifact@v4
         with:
           name: artifacts-${{ matrix.target }}
           path: |
-            git-changes-*.tar.gz
-            git-changes-*.zip
+            git-changelist-*.tar.gz
+            git-changelist-*.zip
 
   publish:
     needs: build
@@ -85,4 +85,4 @@ jobs:
         with:
           body_path: RELEASE_NOTES.md
           files: |
-            dist/git-changes-*
+            dist/git-changelist-*

@@ -1,4 +1,4 @@
-# git-changes 设计文档（v0.2）
+# git-changelist 设计文档（v0.2）
 
 > 一句话：给定本地仓库路径或 GitHub 地址，按 Tag / Release 提取完整、可验证的版本事实（提交、破坏性变更、回滚、文件变动、最早引入版本、依赖锁变更），不内置任何 LLM，以稳定的 JSON / 文本输出与 `SKILL.md` 供 AI 工具（Claude Code / Codex / Gemini / agy）或开发者排查版本问题。
 
@@ -12,11 +12,11 @@
 ## 1. CLI
 
 ```text
-git-changes [TARGET] [OPTIONS]
-git-changes find <QUERY> [TARGET] [-f text|json]
-git-changes which <REV> [TARGET] [-f text|json]
-git-changes deps <FROM> <TO> [TARGET] [-f text|json]
-git-changes skill [--dir DIR] [--print]
+git-changelist [TARGET] [OPTIONS]
+git-changelist find <QUERY> [TARGET] [-f text|json]
+git-changelist which <REV> [TARGET] [-f text|json]
+git-changelist deps <FROM> <TO> [TARGET] [-f text|json]
+git-changelist skill [--dir DIR] [--print]
 
 TARGET            本地路径（默认 "."）或 GitHub 地址：
                   https://github.com/o/r[.git] | git@github.com:o/r.git | o/r
@@ -41,16 +41,16 @@ TARGET            本地路径（默认 "."）或 GitHub 地址：
 
 ### 排查子命令（本地仓库）
 
-- **`git-changes find <QUERY> [TARGET]`**：定位某个提交（SHA 前缀、完整 SHA、`#123` PR 号或标题/正文关键词）进入项目的脉络：
+- **`git-changelist find <QUERY> [TARGET]`**：定位某个提交（SHA 前缀、完整 SHA、`#123` PR 号或标题/正文关键词）进入项目的脉络：
   - 匹配到的原始提交（SHA、日期、作者、标题、PR）；
   - 通过 `git tag --contains <sha>` 找到包含该提交的所有 Tag，按前缀分组并取每组最早版本（`first_tag`）及完整 Tag 列表；
   - 扫描其他分支/Tag 上的 cherry-pick 副本（匹配 `(cherry picked from commit <sha>)` 或相同标题/patch-id），列出回移提交及其最早 Tag（回答「有没有 backport 到 hotfix 版本」）。
-- **`git-changes which <REV> [TARGET]`**：给定线上运行的 commit / ref，回答它所处的位置：
+- **`git-changelist which <REV> [TARGET]`**：给定线上运行的 commit / ref，回答它所处的位置：
   - 解析后的完整 SHA、提交日期与标题；
   - 精确命中的 Tag（若有）；
   - 祖先方向最近的 Tag（`base_tag`）及距离提交数（`ahead`），来自 `git describe --tags --long`；
   - 后继方向最早包含它的 Tag（`next_tag`，按各前缀组最早版本），若尚未发版则为 `null`（unreleased）。
-- **`git-changes deps <FROM> <TO> [TARGET]`**：对比两个版本之间的依赖锁文件变更，自动检测仓库中的 `Cargo.lock`、`uv.lock`、`package-lock.json`、`go.sum`，分类输出 `added`、`removed`、`updated`（含旧版本列表 → 新版本列表）。
+- **`git-changelist deps <FROM> <TO> [TARGET]`**：对比两个版本之间的依赖锁文件变更，自动检测仓库中的 `Cargo.lock`、`uv.lock`、`package-lock.json`、`go.sum`，分类输出 `added`、`removed`、`updated`（含旧版本列表 → 新版本列表）。
 
 ## 2. 数据流
 
