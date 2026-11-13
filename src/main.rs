@@ -30,9 +30,9 @@ struct Cli {
   #[arg(long, conflicts_with = "range")]
   tag: Option<String>,
 
-  /// 只看 A..B 之间的变更
-  #[arg(long, value_name = "A..B", value_parser = parse_range)]
-  range: Option<(String, String)>,
+  /// 只看 A 与 B 之间的变更：--range A..B 或 --range A B
+  #[arg(long, num_args = 1..=2, value_names = ["A..B", "B"])]
+  range: Option<Vec<String>>,
 
   /// 额外展示最新 Tag 之后尚未发布的提交
   #[arg(long)]
@@ -83,6 +83,19 @@ fn parse_range(value: &str) -> Result<(String, String), String> {
   }
 }
 
+/// `--range A..B` or `--range A B`.
+fn range_from(values: Option<Vec<String>>) -> Result<Option<(String, String)>, String> {
+  match values.as_deref() {
+    None => Ok(None),
+    Some([single]) => parse_range(single).map(Some),
+    Some([first, second]) if first.contains("..") => Err(format!(
+      "--range 已用 A..B 写法，多出的参数 {second} 会被误读；请把仓库路径放在 --range 前面"
+    )),
+    Some([from, to]) => Ok(Some((from.clone(), to.clone()))),
+    Some(_) => unreachable!("clap limits --range to 1..=2 values"),
+  }
+}
+
 fn main() {
   if let Err(error) = run(Cli::parse()) {
     eprintln!("错误：{error:#}");
@@ -94,7 +107,7 @@ fn run(cli: Cli) -> Result<()> {
   let selection = Selection {
     limit: cli.limit,
     tag: cli.tag,
-    range: cli.range,
+    range: range_from(cli.range).map_err(anyhow::Error::msg)?,
     unreleased: cli.unreleased,
     max_commits: cli.max_commits,
     merges: cli.merges,
@@ -146,5 +159,33 @@ mod tests {
     assert!(parse_range("v1...v2").is_err());
     assert!(parse_range("v1..").is_err());
     assert!(parse_range("v1").is_err());
+  }
+
+  fn cli_range(args: &[&str]) -> Result<Option<(String, String)>, String> {
+    let cli = Cli::try_parse_from(args).map_err(|e| e.to_string())?;
+    range_from(cli.range)
+  }
+
+  #[test]
+  fn range_accepts_dots_or_two_values() {
+    let expected = Some(("v0.5.1.1".to_string(), "v0.5.4.1".to_string()));
+    assert_eq!(
+      cli_range(&["taglens", ".", "--range", "v0.5.1.1..v0.5.4.1"]),
+      Ok(expected.clone())
+    );
+    assert_eq!(
+      cli_range(&["taglens", ".", "--range", "v0.5.1.1", "v0.5.4.1"]),
+      Ok(expected)
+    );
+    assert_eq!(cli_range(&["taglens", "."]), Ok(None));
+    // `--range A..B PATH` swallows PATH as a second value; say so instead of misreading it.
+    let swallowed = cli_range(&["taglens", "--range", "v1..v2", "."]).unwrap_err();
+    assert!(swallowed.contains("放在 --range 前面"), "{swallowed}");
+    let trailing = Cli::try_parse_from(["taglens", "--range", "a", "b", "repo"]).unwrap();
+    assert_eq!(trailing.target, "repo");
+    assert_eq!(
+      range_from(trailing.range),
+      Ok(Some(("a".into(), "b".into())))
+    );
   }
 }

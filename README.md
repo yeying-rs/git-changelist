@@ -26,7 +26,7 @@ taglens /path/to/repo --github
 # GitHub 仓库：URL、SSH 地址或 owner/repo
 taglens https://github.com/BurntSushi/ripgrep
 taglens tokio-rs/tokio --tag tokio-1.54.1
-taglens owner/repo --range v1.0.0..v1.2.0
+taglens owner/repo --range v1.0.0..v1.2.0   # 或 --range v1.0.0 v1.2.0
 
 # 导出
 taglens owner/repo -f markdown -o RELEASES.md
@@ -36,7 +36,7 @@ taglens . -f json --lang en
 | 参数 | 说明 |
 | --- | --- |
 | `-n, --limit N` | 最近 N 个版本（默认 5） |
-| `--tag T` / `--range A..B` | 只看某个 Tag / 某个区间 |
+| `--tag T` / `--range A..B`（或 `--range A B`） | 只看某个 Tag / 某个区间 |
 | `--unreleased` | 额外展示最新 Tag 之后尚未发布的提交 |
 | `--github` | 本地模式下合并 GitHub Release Notes |
 | `--token` | GitHub Token，默认读取 `GITHUB_TOKEN` |

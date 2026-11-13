@@ -11,7 +11,7 @@ TARGET            本地路径（默认 "."）或 GitHub 地址：
                   https://github.com/o/r[.git] | git@github.com:o/r.git | o/r
 -n, --limit N     展示最近 N 个版本（默认 5）
     --tag T       只看某个 Tag
-    --range A..B  只看 A 与 B 之间的变更
+    --range A..B  只看 A 与 B 之间的变更（也可写作 --range A B）
     --unreleased  额外展示最新 Tag 之后、尚未发布的提交
     --github      本地模式下，按 origin 拉取 GitHub Release Notes 合并展示
     --token TOK   GitHub Token（默认读取环境变量 GITHUB_TOKEN）
