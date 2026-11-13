@@ -28,6 +28,9 @@ taglens https://github.com/BurntSushi/ripgrep
 taglens tokio-rs/tokio --tag tokio-1.54.1
 taglens owner/repo --range v1.0.0..v1.2.0   # 或 --range v1.0.0 v1.2.0
 
+# 升级说明：每个版本下每行「分类: 变化」，按从旧到新排列
+taglens . --range v1.0.0 v1.3.0 -f brief --oldest-first
+
 # 导出
 taglens owner/repo -f markdown -o RELEASES.md
 taglens . -f json --lang en
@@ -42,7 +45,8 @@ taglens . -f json --lang en
 | `--token` | GitHub Token，默认读取 `GITHUB_TOKEN` |
 | `--max-commits N` | 每个版本最多展示的提交数（默认 200） |
 | `--merges` | 保留合并提交（默认过滤） |
-| `-f, --format` | `text` / `markdown` / `json` |
+| `-f, --format` | `text` / `brief` / `markdown` / `json` |
+| `--oldest-first` | 版本从旧到新排列（默认从新到旧） |
 | `-o, --output` | 写入文件 |
 | `--lang` | `zh` / `en` |
 

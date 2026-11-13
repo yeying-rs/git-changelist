@@ -199,6 +199,47 @@ pub fn text(report: &Report, lang: Lang, color: bool) -> String {
   out
 }
 
+/// One `Category: summary` line per change under each version; meant for upgrade notes.
+pub fn brief(report: &Report, lang: Lang) -> String {
+  let texts = lang.texts();
+  let (open, separator, close) = match lang {
+    Lang::Zh => ("（", "，", "）"),
+    Lang::En => (" (", ", ", ")"),
+  };
+  let mut out = String::new();
+  for version in &report.versions {
+    let head = version.tag.as_deref().unwrap_or("HEAD");
+    let range = match &version.previous {
+      Some(previous) => format!("{previous} → {head}"),
+      None => texts.first_version.to_string(),
+    };
+    let count = format!("{} {}", version.total_commits, texts.commits);
+    let title = version_title(version, texts);
+    let _ = writeln!(out, "{title}{open}{range}{separator}{count}{close}");
+    let groups = groups(version, texts);
+    if groups.is_empty() {
+      let _ = writeln!(out, "  {}", texts.no_commits);
+    }
+    for (label, commits) in groups {
+      // Drop the emoji: `✨ 新增功能` → `新增功能`.
+      let label = label.split_once(' ').map_or(label, |(_, name)| name.trim());
+      for commit in commits {
+        let scope = commit
+          .scope
+          .as_ref()
+          .map(|s| format!("[{s}] "))
+          .unwrap_or_default();
+        let pr = commit.pr.map(|n| format!(" (#{n})")).unwrap_or_default();
+        let _ = writeln!(out, "  {label}: {scope}{}{pr}", commit.summary);
+      }
+    }
+    if let Some(note) = truncation_note(version, texts) {
+      let _ = writeln!(out, "  … {note}");
+    }
+  }
+  out
+}
+
 /// Markdown with links to GitHub when the repository slug is known.
 pub fn markdown(report: &Report, lang: Lang) -> String {
   let texts = lang.texts();
@@ -326,6 +367,20 @@ mod tests {
     assert!(out.contains("v0.9.0..v1.0.0"));
     assert!(out.contains("仅显示 3 / 共 5 个提交"));
     assert!(!out.contains('\x1b'));
+  }
+
+  #[test]
+  fn brief_lists_one_labelled_line_per_change() {
+    let mut report = report();
+    report.versions[0].commits[0].scope = Some("ui".into());
+    report.versions[0].commits[0].pr = Some(9);
+    let expected = "v1.0.0（v0.9.0 → v1.0.0，5 个提交）\n\
+                    \x20 破坏性变更: drop api\n\
+                    \x20 新增功能: add two\n\
+                    \x20 问题修复: [ui] fix one (#9)\n\
+                    \x20 … 仅显示 3 / 共 5 个提交\n";
+    assert_eq!(brief(&report, Lang::Zh), expected);
+    assert!(brief(&report, Lang::En).contains("  Bug Fixes: [ui] fix one (#9)"));
   }
 
   #[test]

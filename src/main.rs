@@ -58,9 +58,13 @@ struct Cli {
   #[arg(long, value_enum, default_value = "zh")]
   lang: Lang,
 
-  /// 输出格式
+  /// 输出格式（brief：每行「分类: 变化」，适合看升级带来的改变）
   #[arg(short, long, value_enum, default_value = "text")]
   format: Format,
+
+  /// 按升级顺序从旧到新排列版本（默认从新到旧）
+  #[arg(long)]
+  oldest_first: bool,
 
   /// 写入文件而不是标准输出
   #[arg(short, long)]
@@ -70,6 +74,7 @@ struct Cli {
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum Format {
   Text,
+  Brief,
   Markdown,
   Json,
 }
@@ -113,7 +118,7 @@ fn run(cli: Cli) -> Result<()> {
     merges: cli.merges,
   };
   let path = PathBuf::from(&cli.target);
-  let report = if path.is_dir() {
+  let mut report = if path.is_dir() {
     let mut report = local::collect(&path, &selection)?;
     if cli.github {
       let Some(slug) = report.github.clone() else {
@@ -130,6 +135,9 @@ fn run(cli: Cli) -> Result<()> {
   } else {
     bail!("{} 既不是本地目录，也不是可识别的 GitHub 地址", cli.target);
   };
+  if cli.oldest_first {
+    report.versions.reverse();
+  }
   let output = match cli.format {
     Format::Text => {
       let color = cli.output.is_none()
@@ -137,6 +145,7 @@ fn run(cli: Cli) -> Result<()> {
         && std::env::var_os("NO_COLOR").is_none();
       render::text(&report, cli.lang, color)
     }
+    Format::Brief => render::brief(&report, cli.lang),
     Format::Markdown => render::markdown(&report, cli.lang),
     Format::Json => serde_json::to_string_pretty(&report)? + "\n",
   };
