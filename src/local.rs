@@ -1,0 +1,299 @@
+//! Local repository collector, driven by the system `git` binary.
+
+use std::path::Path;
+use std::process::Command;
+
+use anyhow::{Context, Result, bail};
+
+use crate::classify::classify;
+use crate::model::{RawCommit, Report, Selection, Version};
+
+const FIELD: char = '\x1f';
+const RECORD: char = '\x1e';
+
+struct Tag {
+  name: String,
+  date: String,
+  message: Option<String>,
+}
+
+pub fn collect(repo: &Path, selection: &Selection) -> Result<Report> {
+  git(repo, &["rev-parse", "--git-dir"])
+    .with_context(|| format!("{} 不是 git 仓库", repo.display()))?;
+  let tags = list_tags(repo)?;
+
+  // (tag, previous); tag `None` means HEAD (unreleased).
+  let mut ranges: Vec<(Option<String>, Option<String>)> = Vec::new();
+  if let Some((from, to)) = &selection.range {
+    ranges.push((Some(to.clone()), Some(from.clone())));
+  } else if let Some(tag) = &selection.tag {
+    if !tags.iter().any(|t| &t.name == tag) {
+      bail!("找不到 Tag：{tag}");
+    }
+    ranges.push((Some(tag.clone()), previous_tag(repo, &format!("{tag}^"))));
+  } else {
+    if selection.unreleased || tags.is_empty() {
+      ranges.push((None, previous_tag(repo, "HEAD")));
+    }
+    for tag in tags.iter().take(selection.limit) {
+      ranges.push((Some(tag.name.clone()), previous_tag(repo, &format!("{}^", tag.name))));
+    }
+  }
+
+  let mut versions = Vec::with_capacity(ranges.len());
+  for (tag, previous) in ranges {
+    let head = tag.as_deref().unwrap_or("HEAD");
+    let range = match &previous {
+      Some(previous) => format!("{previous}..{head}"),
+      None => head.to_string(),
+    };
+    let total_commits = count_commits(repo, &range, selection.merges)?;
+    // Only an unreleased range can be legitimately empty; hide it instead of showing noise.
+    if tag.is_none() && total_commits == 0 && !tags.is_empty() {
+      continue;
+    }
+    let info = tag.as_ref().and_then(|name| tags.iter().find(|t| &t.name == name));
+    versions.push(Version {
+      date: info.map(|t| t.date.clone()),
+      tag_message: info.and_then(|t| t.message.clone()),
+      commits: log(repo, &range, selection)?.into_iter().map(classify).collect(),
+      total_commits,
+      release: None,
+      tag,
+      previous,
+    });
+  }
+
+  Ok(Report {
+    source: repo.display().to_string(),
+    github: origin_url(repo),
+    versions,
+  })
+}
+
+/// `origin` remote URL, if any; the caller decides whether it is a GitHub repo.
+pub fn origin_url(repo: &Path) -> Option<String> {
+  git(repo, &["remote", "get-url", "origin"]).ok().map(|s| s.trim().to_string())
+}
+
+fn list_tags(repo: &Path) -> Result<Vec<Tag>> {
+  let format = "--format=%(refname:strip=2)%1f%(creatordate:short)%1f%(objecttype)%1f\
+                %(contents:subject)%1f%(contents:body)%1e";
+  // The last --sort key is primary; version order breaks ties between same-second tags.
+  let out = git(
+    repo,
+    &["for-each-ref", "--sort=-v:refname", "--sort=-creatordate", format, "refs/tags"],
+  )?;
+  Ok(
+    records(&out)
+      .filter_map(|fields| match fields.as_slice() {
+        [name, date, kind, subject, body] => Some(Tag {
+          name: name.to_string(),
+          date: date.to_string(),
+          // A lightweight tag's "contents" is the commit message, not a tag note.
+          message: (*kind == "tag")
+            .then(|| format!("{subject}\n\n{body}").trim().to_string())
+            .filter(|m| !m.is_empty()),
+        }),
+        _ => None,
+      })
+      .collect(),
+  )
+}
+
+/// Nearest tag reachable from `rev`; `None` when there is none (e.g. the first tag).
+fn previous_tag(repo: &Path, rev: &str) -> Option<String> {
+  git(repo, &["describe", "--tags", "--abbrev=0", rev]).ok().map(|s| s.trim().to_string())
+}
+
+fn count_commits(repo: &Path, range: &str, merges: bool) -> Result<usize> {
+  let mut args = vec!["rev-list", "--count"];
+  if !merges {
+    args.push("--no-merges");
+  }
+  args.extend(["--end-of-options", range]);
+  let out = git(repo, &args)?;
+  out.trim().parse().with_context(|| format!("无法解析提交数：{out}"))
+}
+
+fn log(repo: &Path, range: &str, selection: &Selection) -> Result<Vec<RawCommit>> {
+  let max = format!("--max-count={}", selection.max_commits);
+  let mut args = vec!["log", "--format=%H%x1f%an%x1f%as%x1f%s%x1f%b%x1e", &max];
+  if !selection.merges {
+    args.push("--no-merges");
+  }
+  args.extend(["--end-of-options", range]);
+  let out = git(repo, &args)?;
+  Ok(
+    records(&out)
+      .filter_map(|fields| match fields.as_slice() {
+        [sha, author, date, subject, body] => Some(RawCommit {
+          sha: sha.to_string(),
+          author: author.to_string(),
+          date: date.to_string(),
+          subject: subject.to_string(),
+          body: body.to_string(),
+        }),
+        _ => None,
+      })
+      .collect(),
+  )
+}
+
+fn records(out: &str) -> impl Iterator<Item = Vec<&str>> {
+  out
+    .split(RECORD)
+    .map(|record| record.trim_start_matches('\n'))
+    .filter(|record| !record.is_empty())
+    .map(|record| record.split(FIELD).collect())
+}
+
+fn git(repo: &Path, args: &[&str]) -> Result<String> {
+  let output = Command::new("git")
+    .arg("-C")
+    .arg(repo)
+    .args(args)
+    .output()
+    .context("无法执行 git，请确认已安装 git")?;
+  if !output.status.success() {
+    bail!(
+      "git {} 失败：{}",
+      args.join(" "),
+      String::from_utf8_lossy(&output.stderr).trim()
+    );
+  }
+  Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::model::Category;
+  use std::path::PathBuf;
+
+  /// A throwaway repository under the system temp dir.
+  struct TempRepo(PathBuf);
+
+  impl TempRepo {
+    fn new(name: &str) -> Self {
+      let dir = std::env::temp_dir().join(format!("taglens-{name}-{}", std::process::id()));
+      let _ = std::fs::remove_dir_all(&dir);
+      std::fs::create_dir_all(&dir).unwrap();
+      let repo = TempRepo(dir);
+      repo.run(&["init", "-q", "-b", "main"]);
+      repo.run(&["config", "user.name", "Tester"]);
+      repo.run(&["config", "user.email", "t@example.com"]);
+      repo.run(&["config", "tag.gpgSign", "false"]);
+      repo.run(&["config", "commit.gpgSign", "false"]);
+      repo
+    }
+
+    fn run(&self, args: &[&str]) {
+      git(&self.0, args).unwrap();
+    }
+
+    fn commit(&self, message: &str) {
+      self.run(&["commit", "-q", "--allow-empty", "-m", message]);
+    }
+  }
+
+  impl Drop for TempRepo {
+    fn drop(&mut self) {
+      let _ = std::fs::remove_dir_all(&self.0);
+    }
+  }
+
+  fn selection() -> Selection {
+    Selection {
+      limit: 10,
+      tag: None,
+      range: None,
+      unreleased: false,
+      max_commits: 200,
+      merges: false,
+    }
+  }
+
+  fn sample_repo(name: &str) -> TempRepo {
+    let repo = TempRepo::new(name);
+    repo.commit("chore: init");
+    repo.run(&["tag", "v0.1.0"]);
+    repo.commit("feat: add export");
+    repo.commit("fix: crash on empty input (#7)");
+    repo.run(&["tag", "-a", "v0.2.0", "-m", "Second release"]);
+    repo.commit("feat!: drop legacy flag");
+    repo
+  }
+
+  #[test]
+  fn versions_are_split_by_previous_tag() {
+    let repo = sample_repo("split");
+    let report = collect(&repo.0, &selection()).unwrap();
+    let tags: Vec<_> = report.versions.iter().map(|v| v.tag.as_deref()).collect();
+    assert_eq!(tags, [Some("v0.2.0"), Some("v0.1.0")]);
+
+    let v2 = &report.versions[0];
+    assert_eq!(v2.previous.as_deref(), Some("v0.1.0"));
+    assert_eq!(v2.total_commits, 2);
+    assert_eq!(v2.tag_message.as_deref(), Some("Second release"));
+    let categories: Vec<_> = v2.commits.iter().map(|c| c.category).collect();
+    assert_eq!(categories, [Category::Fix, Category::Feature]);
+    assert_eq!(v2.commits[0].pr, Some(7));
+
+    let v1 = &report.versions[1];
+    assert_eq!(v1.previous, None);
+    assert_eq!(v1.tag_message, None, "lightweight tag has no note");
+    assert_eq!(v1.total_commits, 1);
+  }
+
+  #[test]
+  fn unreleased_range_starts_at_latest_reachable_tag() {
+    let repo = sample_repo("unreleased");
+    let report = collect(&repo.0, &Selection { unreleased: true, ..selection() }).unwrap();
+    let unreleased = &report.versions[0];
+    assert_eq!(unreleased.tag, None);
+    assert_eq!(unreleased.previous.as_deref(), Some("v0.2.0"));
+    assert!(unreleased.commits[0].breaking);
+  }
+
+  #[test]
+  fn tag_range_and_limit_selection() {
+    let repo = sample_repo("select");
+    let one = collect(&repo.0, &Selection { tag: Some("v0.2.0".into()), ..selection() }).unwrap();
+    assert_eq!(one.versions.len(), 1);
+    assert!(collect(&repo.0, &Selection { tag: Some("nope".into()), ..selection() }).is_err());
+
+    let range = Some(("v0.1.0".to_string(), "HEAD".to_string()));
+    let ranged = collect(&repo.0, &Selection { range, ..selection() }).unwrap();
+    assert_eq!(ranged.versions[0].total_commits, 3);
+
+    let limited = collect(&repo.0, &Selection { limit: 1, ..selection() }).unwrap();
+    assert_eq!(limited.versions.len(), 1);
+  }
+
+  #[test]
+  fn max_commits_truncates_but_keeps_total() {
+    let repo = sample_repo("truncate");
+    let report = collect(&repo.0, &Selection { max_commits: 1, ..selection() }).unwrap();
+    assert_eq!(report.versions[0].commits.len(), 1);
+    assert_eq!(report.versions[0].total_commits, 2);
+  }
+
+  #[test]
+  fn repo_without_tags_shows_head_as_unreleased() {
+    let repo = TempRepo::new("notags");
+    repo.commit("feat: first");
+    let report = collect(&repo.0, &selection()).unwrap();
+    assert_eq!(report.versions.len(), 1);
+    assert_eq!(report.versions[0].tag, None);
+    assert_eq!(report.versions[0].total_commits, 1);
+  }
+
+  #[test]
+  fn non_repo_is_an_error() {
+    let dir = std::env::temp_dir().join(format!("taglens-norepo-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    assert!(collect(&dir, &selection()).is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+  }
+}
