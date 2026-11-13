@@ -44,9 +44,11 @@ fi
 notes=$(printf '%s\n' "$notes" | sed "1s/HEAD/$tag/g")
 
 git add Cargo.toml Cargo.lock
-git commit -q -m "chore(release): $tag
+if ! git diff --cached --quiet; then
+  git commit -q -m "chore(release): $tag
 
 - 版本号更新为 $version"
+fi
 git tag -a "$tag" -m "$tag
 
 $notes"
