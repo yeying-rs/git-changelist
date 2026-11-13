@@ -13,4 +13,4 @@
 | 9 | 提交改动文件统计 `--files`（`--numstat`）及过滤参数 `--path`、`--grep` | DONE（单次 git log --numstat 采集文件增删统计，支持路径与关键词过滤） |
 | 10 | 版本排查子命令 `taglens find <QUERY>` 与 `taglens which <REV>` | DONE（支持最早 Tag、各前缀系列与 hotfix cherry-pick 回移识别） |
 | 11 | 依赖锁文件变更对比子命令 `taglens deps <FROM> <TO>`（`Cargo.lock`、`uv.lock`、`package-lock.json`、`go.sum`） | DONE（支持 4 类锁文件新增/移除/升级对比，无新增外部依赖） |
-| 12 | 编写 `skills/taglens/SKILL.md`，更新 `scripts/install.sh`、`README.md` 与 `AGENTS.md` | TODO |
+| 12 | 编写 `skills/taglens/SKILL.md`，更新 `scripts/install.sh`、`README.md` 与 `AGENTS.md` | DONE（新增 SKILL.md 与 --skill 安装支持，同步更新文档） |

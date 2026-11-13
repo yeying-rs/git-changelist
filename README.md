@@ -9,6 +9,7 @@
 - 识别 Conventional Commits，也能处理自由格式与中文提交信息
 - 输出终端彩色文本、精简升级清单（brief）、Markdown 或 JSON，可写入文件
 - 适配 monorepo（`react@0.1.0`、`tokio-macros-2.x` 等多前缀 Tag）与 hotfix 分支
+- **面向 AI 与版本排查**：内置 `find`（反查提交最早 Tag 与 hotfix 回移）、`which`（定位提交所属版本）、`deps`（锁文件依赖对比）、`--files` / `--path` / `--grep` 及 [`skills/taglens/SKILL.md`](skills/taglens/SKILL.md)
 
 ## 安装
 
@@ -18,9 +19,9 @@
 # 从 GitHub 安装
 cargo install --git https://github.com/yuxuetr/changelog --locked
 
-# 或者克隆后本地安装
+# 或者克隆后本地安装（加 --skill 会同步安装 AI Skill 到 ~/.gemini/skills、~/.claude/skills 等目录）
 git clone https://github.com/yuxuetr/changelog && cd changelog
-scripts/install.sh
+scripts/install.sh --skill
 ```
 
 ## 快速开始
@@ -54,6 +55,23 @@ v0.5.4.1（v0.5.4 → v0.5.4.1，46 个提交）
 
 每段列出的是**升级到该版本**带来的变化；起点版本（这里的 v0.5.1.1）本身不单独成段。
 
+### 版本问题排查（子命令与过滤）
+
+```bash
+# 1. 这个修复 / PR / 提交最早进了哪个版本？有没有 cherry-pick 回移到 hotfix 分支？
+taglens find "#6596" /path/to/repo
+taglens find a1b2c3d /path/to/repo -f json
+
+# 2. 线上跑的 commit SHA 属于哪个版本？距离前一个 Tag 几个提交？
+taglens which a1b2c3d /path/to/repo
+
+# 3. 两个版本之间哪些依赖锁文件（Cargo.lock / uv.lock / package-lock.json / go.sum）变了？
+taglens deps v0.5.1.1 v0.5.4.1 /path/to/repo
+
+# 4. 只看某个目录/模块或某个关键词的变更，并附带每个提交改动的文件与增删行数
+taglens . --range v0.5.1.1 v0.5.4.1 --path src/core --grep timeout --files -f json
+```
+
 ### 导出
 
 ```bash
@@ -75,6 +93,9 @@ taglens owner/repo -f brief --lang en -o UPGRADE.txt        # 英文分类名
 | `--token` | GitHub Token，默认读取环境变量 `GITHUB_TOKEN` |
 | `--max-commits N` | 每个版本最多展示的提交数（默认 200） |
 | `--merges` | 保留合并提交（默认过滤） |
+| `--path PATH` | 只看触及指定文件或目录的提交（可多次传入，仅本地仓库） |
+| `--grep TEXT` | 只看标题、正文、SHA 或 PR 匹配关键词的提交（不区分大小写） |
+| `--files` | 附带每个提交修改的文件与增删行数（仅本地仓库） |
 | `-f, --format` | `text`（默认）/ `brief` / `markdown` / `json` |
 | `--oldest-first` | 版本从旧到新排列（默认从新到旧） |
 | `-o, --output` | 写入文件而不是标准输出 |

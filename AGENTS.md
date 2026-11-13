@@ -13,13 +13,14 @@ docs / chore / other). Output: coloured text, `brief` upgrade list, Markdown, JS
 
 | File | Responsibility |
 | --- | --- |
-| `src/main.rs` | clap CLI, target dispatch (dir → local, else GitHub slug), `--range` parsing, output/file writing |
-| `src/model.rs` | Plain data: `RawCommit`, `Commit`, `Category`, `Version`, `Release`, `Report`, `Selection` |
-| `src/classify.rs` | `RawCommit` → `Commit`: Conventional Commits, then zh/en keyword heuristics |
-| `src/local.rs` | Local collector via the system `git` binary; tag listing, previous-tag, `--range` splitting |
+| `src/main.rs` | clap CLI + subcommands (`find`, `which`, `deps`), target dispatch, `--range` parsing, output writing |
+| `src/model.rs` | Plain data: `RawCommit`, `Commit`, `Trailer`, `FileChange`, `Report`, `FindReport`, `WhichReport`, `DepsReport` |
+| `src/classify.rs` | `RawCommit` → `Commit`: Conventional Commits, zh/en heuristics, `classified_by`, trailers, revert linking, `--grep` |
+| `src/local.rs` | Local collector via `git`: tag listing, `--range` splitting, `--numstat` files, `find`, `which`, `deps` lockfile diff |
 | `src/github.rs` | GitHub collector: `git ls-remote` for tags, REST for releases/compare; slug parsing; version ordering |
-| `src/render.rs` | `text` / `brief` / `markdown` renderers and zh/en labels |
-| `scripts/` | `check.sh` (quality gate), `build.sh`, `install.sh`, `release.sh` |
+| `src/render.rs` | `text` / `brief` / `markdown` / `find_text` / `which_text` / `deps_text` renderers and zh/en labels |
+| `skills/taglens/SKILL.md` | Agent skill instructing external AI tools how to query `taglens` and interpret its JSON fact contract |
+| `scripts/` | `check.sh` (quality gate), `build.sh`, `install.sh` (`--skill`), `release.sh` |
 
 Modules talk only through `model.rs` data. There is deliberately **no trait** over the two collectors —
 they fetch data too differently; don't add one until a third source exists.
