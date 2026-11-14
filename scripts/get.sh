@@ -1,9 +1,9 @@
 #!/usr/bin/env sh
 # One-step remote installer for git-changelist + its AI skill:
-#   curl -fsSL https://raw.githubusercontent.com/yuxuetr/changelog/main/scripts/get.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/yeying-rs/git-changelist/main/scripts/get.sh | sh
 set -eu
 
-REPO="${GIT_CHANGELIST_REPO:-yuxuetr/changelog}"
+REPO="${GIT_CHANGELIST_REPO:-yeying-rs/git-changelist}"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.cargo/bin}"
 mkdir -p "$INSTALL_DIR"
 

@@ -17,7 +17,7 @@
 ### 方式一：一键安装预编译二进制 + AI Skill（macOS / Linux）
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/yuxuetr/changelog/main/scripts/get.sh | sh
+curl -fsSL https://raw.githubusercontent.com/yeying-rs/git-changelist/main/scripts/get.sh | sh
 ```
 
 ### 方式二：通过 Cargo 安装（crates.io 或 GitHub）
@@ -29,7 +29,7 @@ curl -fsSL https://raw.githubusercontent.com/yuxuetr/changelog/main/scripts/get.
 cargo install git-changelist --locked
 
 # 或从 GitHub 安装最新主干
-cargo install --git https://github.com/yuxuetr/changelog --locked
+cargo install --git https://github.com/yeying-rs/git-changelist --locked
 
 # 将内置的 AI Skill（SKILL.md）一键安装到本机 Claude Code / Gemini / Codex / agy 的 skills 目录
 git-changelist skill
@@ -38,7 +38,7 @@ git-changelist skill
 ### 方式三：克隆源码安装
 
 ```bash
-git clone https://github.com/yuxuetr/changelog && cd changelog
+git clone https://github.com/yeying-rs/git-changelist && cd git-changelist
 scripts/install.sh --skill
 ```
 
